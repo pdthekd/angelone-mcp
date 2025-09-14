@@ -1,0 +1,10 @@
+smartapi-python
+pyotp
+logzero
+websocket-client 
+fastapi
+fastapi[standard]
+python-dotenv
+pandas
+requests
+bsedata

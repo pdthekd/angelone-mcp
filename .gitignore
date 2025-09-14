@@ -1,0 +1,4 @@
+myenv/
+logs/
+__pycache__
+.env
