@@ -17,7 +17,8 @@ class Interval(str, Enum):
     ONE_DAY = "ONE_DAY"
 
 class StockInput(BaseModel):
-    symbol: str
+    entity: str
     interval: Interval
     fromdate: datetime = Field(..., example="2021-02-08 09:00")
     todate: datetime = Field(..., example="2021-02-08 09:16")
+    isSymbol: bool = Field(..., example=True)

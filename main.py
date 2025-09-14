@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import os
 from type import StockInput
 
-from utils.getTokens import getTokenFromName
+from utils.getTokens import getTokenFromAngelMaster, getTokenFromName
 
 app = FastAPI()
 
@@ -64,16 +64,16 @@ async def holdings():
                         "pnl_percentage": h.get("pnlpercentage"),
                         "product": h.get("product")
                         })
-                return {
-                        "success": True,
-                        "holdings": enriched,
-                        "portfolio_summary": {
-                            "total_value": totals.get("totalholdingvalue"),
-                            "invested_value": totals.get("totalinvvalue"),
-                            "total_pnl": totals.get("totalprofitandloss"),
-                            "total_pnl_percentage": totals.get("totalpnlpercentage"),
-                            }
+            return {
+                    "success": True,
+                    "holdings": enriched,
+                    "portfolio_summary": {
+                        "total_value": totals.get("totalholdingvalue"),
+                        "invested_value": totals.get("totalinvvalue"),
+                        "total_pnl": totals.get("totalprofitandloss"),
+                        "total_pnl_percentage": totals.get("totalpnlpercentage"),
                         }
+                    }
                                                                                         
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -95,7 +95,10 @@ async def getCandle(param: StockInput):
         else:
             fromdate_str = param.fromdate.strftime("%Y-%m-%d %H:%M")
             todate_str = param.todate.strftime("%Y-%m-%d %H:%M")
-            token, exch = getTokenFromName(param.symbol)
+            if param.isSymbol:
+                token, exch = getTokenFromAngelMaster(param.entity)
+            else:
+                token, exch = getTokenFromName(param.entity)
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
             historicParam={
@@ -114,7 +117,7 @@ async def getCandle(param: StockInput):
             for data in candle_data["data"]:
                 datas.append({"timestamp": data[0], "open": data[1], "high": data[2], "low": data[3], "close": data[4], "volume": data[5]})
             response["data"] = datas
-            response["stock"] = param.symbol
+            response["stock"] = param.entity
             response["token"] = token
             return response
     except Exception as e:
