@@ -363,6 +363,7 @@ CEATLTD,CEAT Limited,ceat
 CEIGALL,Ceigall India Limited,ceigall
 CELEBRITY,Celebrity Fashions Limited,celebrity fashions
 CELLO,Cello World Limited,cello world
+CEMPRO,Cemindia Projects Limited,cemindia projects
 CENTENKA,Century Enka Limited,century enka
 CENTEXT,Century Extrusions Limited,century extrusions
 CENTRALBK,Central Bank of India,central bank of
@@ -480,6 +481,7 @@ DEN,Den Networks Limited,den networks
 DENORA,De Nora India Limited,de nora
 DENTA,Denta Water and Infra Solutions Limited,denta water and infra solutions
 DEVIT,Dev Information Technology Limited,dev information technology
+DEVX,Dev Accelerator Limited,dev accelerator
 DEVYANI,Devyani International Limited,devyani international
 DGCONTENT,Digicontent Limited,digicontent
 DHAMPURSUG,Dhampur Sugar Mills Limited,dhampur sugar mills
@@ -640,7 +642,7 @@ GANDHAR,Gandhar Oil Refinery (India) Limited,gandhar oil refinery
 GANDHITUBE,Gandhi Special Tubes Limited,gandhi special tubes
 GANECOS,Ganesha Ecosphere Limited,ganesha ecosphere
 GANESHBE,Ganesh Benzoplast Limited,ganesh benzoplast
-GANESHHOUC,Ganesh Housing Corporation Limited,ganesh housing corporation
+GANESHHOU,GANESH HOUSING LIMITED,ganesh housing
 GANGAFORGE,Ganga Forging Limited,ganga forging
 GANGESSECU,Ganges Securities Limited,ganges securities
 GARFIBRES,Garware Technical Fibres Limited,garware technical fibres
@@ -649,14 +651,12 @@ GATECH,GACM Technologies Limited,gacm technologies
 GATECHDVR,GACM Technologies Limited,gacm technologies
 GATEWAY,Gateway Distriparks Limited,gateway distriparks
 GAYAHWS,Gayatri Highways Limited,gayatri highways
-GAYAPROJ,Gayatri Projects Limited,gayatri projects
 GCSL,Gretex Corporate Services Limited,gretex corporate services
 GEECEE,GeeCee Ventures Limited,geecee ventures
 GEEKAYWIRE,Geekay Wires Limited,geekay wires
 GEMAROMA,Gem Aromatics Limited,gem aromatics
 GENCON,Generic Engineering Construction and Projects Limited,generic engineering construction and projects
 GENESYS,Genesys International Corporation Limited,genesys international corporation
-GENSOL,Gensol Engineering Limited,gensol engineering
 GENUSPAPER,Genus Paper & Boards Limited,genus paper boards
 GENUSPOWER,Genus Power Infrastructures Limited,genus power infrastructures
 GEOJITFSL,Geojit Financial Services Limited,geojit financial services
@@ -894,6 +894,7 @@ INDUSINDBK,IndusInd Bank Limited,indusind bank
 INDUSTOWER,Indus Towers Limited,indus towers
 INFIBEAM,Infibeam Avenues Limited,infibeam avenues
 INFOBEAN,InfoBeans Technologies Limited,infobeans technologies
+INFOMEDIA,Infomedia Press Limited,infomedia press
 INFY,Infosys Limited,infosys
 INGERRAND,Ingersoll Rand (India) Limited,ingersoll rand
 INNOVACAP,Innova Captab Limited,innova captab
@@ -928,7 +929,6 @@ ISHANCH,Ishan Dyes and Chemicals Limited,ishan dyes and chemicals
 ITC,ITC Limited,itc
 ITCHOTELS,ITC Hotels Limited,itc hotels
 ITDC,India Tourism Development Corporation Limited,india tourism development corporation
-ITDCEM,ITD Cementation India Limited,itd cementation
 ITI,ITI Limited,iti
 IVC,IL&FS Investment Managers Limited,il fs investment managers
 IVP,IVP Limited,ivp
@@ -1270,6 +1270,7 @@ MUTHOOTCAP,Muthoot Capital Services Limited,muthoot capital services
 MUTHOOTFIN,Muthoot Finance Limited,muthoot finance
 MUTHOOTMF,Muthoot Microfin Limited,muthoot microfin
 MVGJL,Manoj Vaibhav Gems N Jewellers Limited,manoj vaibhav gems n jewellers
+MWL,Mangalam Worldwide Limited,mangalam worldwide
 NACLIND,NACL Industries Limited,nacl
 NAGAFERT,Nagarjuna Fertilizers and Chemicals Limited,nagarjuna fertilizers and chemicals
 NAGREEKCAP,Nagreeka Capital & Infrastructure Limited,nagreeka capital infrastructure
@@ -1740,6 +1741,7 @@ SHREEPUSHK,Shree Pushkar Chemicals & Fertilisers Limited,shree pushkar chemicals
 SHREERAMA,Shree Rama Multi-Tech Limited,shree rama multi tech
 SHRENIK,Shrenik Limited,shrenik
 SHREYANIND,Shreyans Industries Limited,shreyans
+SHRINGARMS,Shringar House of Mangalsutra Limited,shringar house of mangalsutra
 SHRIPISTON,Shriram Pistons & Rings Limited,shriram pistons rings
 SHRIRAMFIN,Shriram Finance Limited,shriram finance
 SHRIRAMPPS,Shriram Properties Limited,shriram properties
@@ -1942,6 +1944,7 @@ THOMASCOTT,Thomas Scott (India) Limited,thomas scott
 THYROCARE,Thyrocare Technologies Limited,thyrocare technologies
 TI,Tilaknagar Industries Limited,tilaknagar
 TICL,Twamev Construction and Infrastructure Limited,twamev construction and infrastructure
+TIGERLOGS,Tiger Logistics (India) Limited,tiger logistics
 TIIL,Technocraft Industries (India) Limited,technocraft industries
 TIINDIA,Tube Investments of India Limited,tube investments of
 TIJARIA,Tijaria Polypipes Limited,tijaria polypipes
@@ -2023,6 +2026,7 @@ UNIVPHOTO,Universus Photo Imagings Limited,universus photo imagings
 UNOMINDA,UNO Minda Limited,uno minda
 UPL,UPL Limited,upl
 URAVIDEF,Uravi Defence and Technology Limited,uravi defence and technology
+URBANCO,Urban Company Limited,urban
 URJA,Urja Global Limited,urja global
 USHAMART,Usha Martin Limited,usha martin
 USK,Udayshivakumar Infra Limited,udayshivakumar infra
@@ -2076,7 +2080,6 @@ VIPIND,VIP Industries Limited,vip
 VIPULLTD,Vipul Limited,vipul
 VIRINCHI,Virinchi Limited,virinchi
 VISAKAIND,Visaka Industries Limited,visaka
-VISASTEEL,Visa Steel Limited,visa steel
 VISHNU,Vishnu Chemicals Limited,vishnu chemicals
 VISHWARAJ,Vishwaraj Sugar Industries Limited,vishwaraj sugar
 VIVIDHA,Visagar Polytex Limited,visagar polytex
