@@ -4,10 +4,17 @@ import pyotp
 from dotenv import load_dotenv
 import os
 from type import StockInput
+from utils.retry_helper_decorator import retry_with_backoff
+import time
 
 from utils.getTokens import getTokenFromAngelMaster, getTokenFromName
 
 app = FastAPI()
+
+@retry_with_backoff(max_retries=3, base_delay=2)
+def make_api_call(smartApi, method_name, *args, **kwargs):
+    method = getattr(smartApi, method_name)
+    return method(*args, **kwargs)
 
 
 @app.get("/getExchanges")
@@ -21,7 +28,8 @@ async def root():
         
         smartApi = SmartConnect(api_key)
         totp = pyotp.TOTP(token).now()
-        data = smartApi.generateSession(username, pwd, totp)
+        # data = smartApi.generateSession(username, pwd, totp)
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
         if data['status'] == False:
             return {"success": False, "error": "data status is false"}
         else:
@@ -44,7 +52,8 @@ async def holdings():
         token = os.environ.get('token')
         smartApi = SmartConnect(api_key)
         totp = pyotp.TOTP(token).now()
-        data = smartApi.generateSession(username, pwd, totp)
+        # data = smartApi.generateSession(username, pwd, totp)
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
         if data['status'] == False:
             return {"success": False, "error": "data status is false"}
         else:
@@ -89,7 +98,8 @@ async def getCandle(param: StockInput):
         token = os.environ.get('token')
         smartApi = SmartConnect(api_key)
         totp = pyotp.TOTP(token).now()
-        data = smartApi.generateSession(username, pwd, totp)
+        # data = smartApi.generateSession(username, pwd, totp)
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
         if data['status'] == False:
             return {"success": False, "error": "data status is false"}
         else:
