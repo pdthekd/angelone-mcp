@@ -129,6 +129,9 @@ async def getCandle(param: StockInput):
             response["data"] = datas
             response["stock"] = param.entity
             response["token"] = token
+            response["fromDate"] = fromdate_str
+            response["toDate"] = todate_str
+            response["interval"] = param.interval.value
             return response
     except Exception as e:
         return {"success": False, "error": str(e)}
