@@ -96,6 +96,7 @@ async def getCandle(param: StockInput):
         username = os.environ.get('username')
         pwd = os.environ.get('pwd')
         token = os.environ.get('token')
+        threshold = os.environ.get('threshold')
         smartApi = SmartConnect(api_key)
         totp = pyotp.TOTP(token).now()
         # data = smartApi.generateSession(username, pwd, totp)
@@ -108,7 +109,7 @@ async def getCandle(param: StockInput):
             if param.isSymbol:
                 token, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch = getTokenFromName(param.entity)
+                token, exch = getTokenFromName(param.entity, threshold=int(threshold))
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
             historicParam={
