@@ -3,7 +3,7 @@ from SmartApi import SmartConnect
 import pyotp
 from dotenv import load_dotenv
 import os
-from type import StockInput
+from type import BuyStockSLL, BuyStockSLM, CancelOrder, SellStockSLL, SellStockSLM, StockInput, TargetSell
 from utils.retry_helper_decorator import retry_with_backoff
 import time
 
@@ -109,7 +109,7 @@ async def getCandle(param: StockInput):
             if param.isSymbol:
                 token, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch = getTokenFromName(param.entity, threshold=int(threshold))
+                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
             historicParam={
@@ -137,3 +137,474 @@ async def getCandle(param: StockInput):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
+
+@app.post('/buyStockSLL')
+async def buy_stock_sll(param: BuyStockSLL):
+    try:
+        load_dotenv()
+        api_key = os.environ.get('api_key')
+        username = os.environ.get('username')
+        pwd = os.environ.get('pwd')
+        token = os.environ.get('token')
+        threshold = os.environ.get('threshold')
+        
+        smartApi = SmartConnect(api_key)
+        totp = pyotp.TOTP(token).now()
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
+        symbol = None
+        if data['status'] == False:
+            return {"success": False, "error": "data status is false"}
+        else:
+            if param.isSymbol:
+                token, exch = getTokenFromAngelMaster(param.entity)
+                symbol = param.entity
+            else:
+                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+            
+            if not token or not exch:
+                raise Exception("No such company registered in NSE or BSE")
+            
+            orderparams = {
+                "variety": "STOPLOSS",
+                "tradingsymbol": symbol,
+                "symboltoken": token,
+                "transactiontype": "BUY",
+                "exchange": exch,
+                "ordertype": "STOPLOSS_LIMIT",
+                "producttype": "INTRADAY" if param.product_type == "INTRADAY" else "DELIVERY",
+                "duration": "DAY",
+                "price": param.limit_price,
+                "triggerprice": param.trigger_price,
+                "quantity": param.quantity
+            }
+            order_response = make_api_call(smartApi, 'placeOrder', orderparams)
+            if isinstance(order_response, str):
+                return {
+                    "success": True,
+                    "order_id": order_response,
+                    "message": "SL-L Buy order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "trigger_price": param.trigger_price,
+                        "limit_price": param.limit_price,
+                        "exchange": exch
+                    }
+                }
+            elif isinstance(order_response, dict) and order_response.get('status'):
+                return {
+                    "success": True,
+                    "order_id": order_response.get('data', {}).get('orderid'),
+                    "message": "SL-L Buy order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "trigger_price": param.trigger_price,
+                        "limit_price": param.limit_price,
+                        "exchange": exch
+                    }
+                }
+            else:
+                error_msg = order_response.get('message', 'Order placement failed') if isinstance(order_response, dict) else str(order_response)
+                return {"success": False, "error": error_msg}            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post('/buyStockSLM')
+async def buy_stock_slm(param: BuyStockSLM):
+    try:
+        load_dotenv()
+        api_key = os.environ.get('api_key')
+        username = os.environ.get('username')
+        pwd = os.environ.get('pwd')
+        token = os.environ.get('token')
+        threshold = os.environ.get('threshold')
+        
+        smartApi = SmartConnect(api_key)
+        totp = pyotp.TOTP(token).now()
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
+        symbol = None
+        if data['status'] == False:
+            return {"success": False, "error": "data status is false"}
+        else:
+            if param.isSymbol:
+                token, exch = getTokenFromAngelMaster(param.entity)
+                symbol = param.entity
+            else:
+                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+            
+            if not token or not exch:
+                raise Exception("No such company registered in NSE or BSE")
+            
+            orderparams = {
+                "variety": "STOPLOSS",
+                "tradingsymbol": symbol,
+                "symboltoken": token,
+                "transactiontype": "BUY",
+                "exchange": exch,
+                "ordertype": "STOPLOSS_MARKET",
+                "producttype": "INTRADAY" if param.product_type == "INTRADAY" else "DELIVERY",
+                "duration": "DAY",
+                "price": "0",
+                "triggerprice": param.trigger_price,
+                "quantity": param.quantity
+            }
+            
+            order_response = make_api_call(smartApi, 'placeOrder', orderparams)
+
+            if isinstance(order_response, str):
+                return {
+                    "success": True,
+                    "order_id": order_response,
+                    "message": "SL-M Buy order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "trigger_price": param.trigger_price,
+                        "exchange": exch
+                    }
+                }
+            elif isinstance(order_response, dict) and order_response.get('status'):
+                return {
+                    "success": True,
+                    "order_id": order_response.get('data', {}).get('orderid'),
+                    "message": "SL-M Buy order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "trigger_price": param.trigger_price,
+                        "exchange": exch
+                    }
+                }
+            else:
+                error_msg = order_response.get('message', 'Order placement failed') if isinstance(order_response, dict) else str(order_response)
+                return {"success": False, "error": error_msg}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post('/sellStockSLL')
+async def sell_stock_sll(param: SellStockSLL):
+    try:
+        load_dotenv()
+        api_key = os.environ.get('api_key')
+        username = os.environ.get('username')
+        pwd = os.environ.get('pwd')
+        token = os.environ.get('token')
+        threshold = os.environ.get('threshold')
+        
+        smartApi = SmartConnect(api_key)
+        totp = pyotp.TOTP(token).now()
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
+        symbol = None
+        if data['status'] == False:
+            return {"success": False, "error": "data status is false"}
+        else:
+            if param.isSymbol:
+                token, exch = getTokenFromAngelMaster(param.entity)
+                symbol = param.entity
+            else:
+                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+            
+            if not token or not exch:
+                raise Exception("No such company registered in NSE or BSE")
+            
+            holdings = smartApi.allholding()
+            holdings_list = holdings.get("data", {}).get("holdings", [])
+            current_quantity = 0
+            if symbol.endswith('-EQ'):
+                symbol = symbol[:-3]
+            for h in holdings_list:
+                if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == symbol + '-EQ') and h.get("exchange") == exch:
+                    current_quantity = float(h.get("quantity", 0))
+                    break
+            
+            if current_quantity == 0:
+                return {
+                    "success": False, 
+                    "error": f"No holdings found for {param.entity}"
+                }
+            
+            sell_quantity = int(current_quantity) if param.sell_all else param.quantity
+            
+            if current_quantity < sell_quantity:
+                return {
+                    "success": False, 
+                    "error": f"Insufficient quantity. You have {current_quantity} but trying to sell {sell_quantity}"
+                }
+            
+            orderparams = {
+                "variety": "STOPLOSS",
+                "tradingsymbol": symbol,
+                "symboltoken": token,
+                "transactiontype": "SELL",
+                "exchange": exch,
+                "ordertype": "STOPLOSS_LIMIT",
+                "producttype": "DELIVERY",
+                "duration": "DAY",
+                "price": param.limit_price,
+                "triggerprice": param.trigger_price,
+                "quantity": sell_quantity
+            }
+            
+            order_response = make_api_call(smartApi, 'placeOrder', orderparams)
+
+            if isinstance(order_response, str):
+                return {
+                    "success": True,
+                    "order_id": order_response,
+                    "message": "SL-L Sell order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": sell_quantity,
+                        "trigger_price": param.trigger_price,
+                        "limit_price": param.limit_price,
+                        "exchange": exch
+                    }
+                }
+            elif isinstance(order_response, dict) and order_response.get('status'):
+                return {
+                    "success": True,
+                    "order_id": order_response.get('data', {}).get('orderid'),
+                    "message": "SL-L Sell order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": sell_quantity,
+                        "trigger_price": param.trigger_price,
+                        "limit_price": param.limit_price,
+                        "exchange": exch
+                    }
+                }
+            else:
+                error_msg = order_response.get('message', 'Order placement failed') if isinstance(order_response, dict) else str(order_response)
+                return {"success": False, "error": error_msg}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post('/sellStockSLM')
+async def sell_stock_slm(param: SellStockSLM):
+    try:
+        load_dotenv()
+        api_key = os.environ.get('api_key')
+        username = os.environ.get('username')
+        pwd = os.environ.get('pwd')
+        token = os.environ.get('token')
+        threshold = os.environ.get('threshold')
+        
+        smartApi = SmartConnect(api_key)
+        totp = pyotp.TOTP(token).now()
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
+        symbol = None
+        if data['status'] == False:
+            return {"success": False, "error": "data status is false"}
+        else:
+            if param.isSymbol:
+                token, exch = getTokenFromAngelMaster(param.entity)
+                symbol = param.entity
+            else:
+                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+            if not token or not exch:
+                raise Exception("No such company registered in NSE or BSE")
+            
+            holdings = smartApi.allholding()
+            holdings_list = holdings.get("data", {}).get("holdings", [])
+            current_quantity = 0
+            if symbol.endswith('-EQ'):
+                symbol = symbol[:-3]
+            for h in holdings_list:
+                if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == symbol + '-EQ') and h.get("exchange") == exch:
+                    current_quantity = float(h.get("quantity", 0))
+                    break
+            
+            if current_quantity < param.quantity:
+                return {
+                    "success": False, 
+                    "error": f"Insufficient quantity. You have {current_quantity} but trying to sell {param.quantity}"
+                }
+            
+            orderparams = {
+                "variety": "STOPLOSS",
+                "tradingsymbol": symbol,
+                "symboltoken": token,
+                "transactiontype": "SELL",
+                "exchange": exch,
+                "ordertype": "STOPLOSS_MARKET",
+                "producttype": "DELIVERY",
+                "duration": "DAY",
+                "price": "0",
+                "triggerprice": param.trigger_price,
+                "quantity": param.quantity
+            }
+            
+            order_response = make_api_call(smartApi, 'placeOrder', orderparams)
+
+            if isinstance(order_response, str):
+                return {
+                    "success": True,
+                    "order_id": order_response,
+                    "message": "SL-M Sell order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "trigger_price": param.trigger_price,
+                        "exchange": exch
+                    }
+                }
+            elif isinstance(order_response, dict) and order_response.get('status'):
+                return {
+                    "success": True,
+                    "order_id": order_response.get('data', {}).get('orderid'),
+                    "message": "SL-M Sell order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "trigger_price": param.trigger_price,
+                        "exchange": exch
+                    }
+                }
+            else:
+                error_msg = order_response.get('message', 'Order placement failed') if isinstance(order_response, dict) else str(order_response)
+                return {"success": False, "error": error_msg}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post('/targetSell')
+async def target_sell(param: TargetSell):
+    try:
+        load_dotenv()
+        api_key = os.environ.get('api_key')
+        username = os.environ.get('username')
+        pwd = os.environ.get('pwd')
+        token = os.environ.get('token')
+        threshold = os.environ.get('threshold')
+        
+        smartApi = SmartConnect(api_key)
+        totp = pyotp.TOTP(token).now()
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
+        symbol = None
+        if data['status'] == False:
+            return {"success": False, "error": "data status is false"}
+        else:
+            if param.isSymbol:
+                token, exch = getTokenFromAngelMaster(param.entity)
+                symbol = param.entity
+            else:
+                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+            
+            if not token or not exch:
+                raise Exception("No such company registered in NSE or BSE")
+            
+            holdings = smartApi.allholding()
+            holdings_list = holdings.get("data", {}).get("holdings", [])
+            current_quantity = 0
+            if symbol.endswith('-EQ'):
+                symbol = symbol[:-3]
+            for h in holdings_list:
+                if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == symbol + '-EQ') and h.get("exchange") == exch:
+                    current_quantity = float(h.get("quantity", 0))
+                    break            
+            if current_quantity < param.quantity:
+                return {
+                    "success": False, 
+                    "error": f"Insufficient quantity. You have {current_quantity} but trying to sell {param.quantity}"
+                }
+            
+            orderparams = {
+                "variety": "NORMAL",
+                "tradingsymbol": symbol,
+                "symboltoken": token,
+                "transactiontype": "SELL",
+                "exchange": exch,
+                "ordertype": "LIMIT",
+                "producttype": "DELIVERY",
+                "duration": "DAY",
+                "price": param.target_price,
+                "quantity": param.quantity
+            }
+            
+            order_response = make_api_call(smartApi, 'placeOrder', orderparams)
+
+            if isinstance(order_response, str):
+                return {
+                    "success": True,
+                    "order_id": order_response,
+                    "message": "Target Sell order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "target_price": param.target_price,
+                        "exchange": exch
+                    }
+                }
+            elif isinstance(order_response, dict) and order_response.get('status'):
+                return {
+                    "success": True,
+                    "order_id": order_response.get('data', {}).get('orderid'),
+                    "message": "Target Sell order placed successfully",
+                    "details": {
+                        "entity": param.entity,
+                        "symbol": symbol,
+                        "quantity": param.quantity,
+                        "target_price": param.target_price,
+                        "exchange": exch
+                    }
+                }
+            else:
+                error_msg = order_response.get('message', 'Order placement failed') if isinstance(order_response, dict) else str(order_response)
+                return {"success": False, "error": error_msg}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    
+@app.post('/cancelOrder')
+async def cancel_order(param: CancelOrder):
+    try:
+        load_dotenv()
+        api_key = os.environ.get('api_key')
+        username = os.environ.get('username')
+        pwd = os.environ.get('pwd')
+        token = os.environ.get('token')
+        
+        smartApi = SmartConnect(api_key)
+        totp = pyotp.TOTP(token).now()
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
+        if data['status'] == False:
+            return {"success": False, "error": "data status is false"}
+        else:
+            # cancel_response = smartApi.cancelOrder(param.order_id, param.variety)
+
+            cancel_response = make_api_call(smartApi, 'cancelOrder', param.order_id, param.variety)
+            
+            if isinstance(cancel_response, str):
+                return {
+                    "success": True,
+                    "message": "Order cancelled successfully",
+                    "order_id": param.order_id
+                }
+            elif isinstance(cancel_response, dict) and cancel_response.get('status'):
+                return {
+                    "success": True,
+                    "message": "Order cancelled successfully",
+                    "order_id": param.order_id
+                }
+            else:
+                error_msg = cancel_response.get('message', 'Order cancellation failed') if isinstance(cancel_response, dict) else str(cancel_response)
+                return {"success": False, "error": error_msg}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
