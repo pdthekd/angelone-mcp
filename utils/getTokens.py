@@ -13,15 +13,14 @@ def getTokenFromName(name: str, threshold: int = 90):
         if not token:
             return (None, None, None)
         else:
-            return (token, "bse", symbol)
+            return (token, symbol, "bse")
     else:
-        token, exch = getTokenFromAngelMaster(symbol=symbol+'-EQ')
+        token, symbol_res, exch = getTokenFromAngelMaster(symbol=symbol+'-EQ')
         if not token and not exch:
-            token, exch = getTokenFromAngelMaster(symbol=symbol)
-            return (token, exch, symbol)
+            token, symbol_res, exch = getTokenFromAngelMaster(symbol=symbol)
+            return (token, symbol_res, exch)
         else:
-            symbol = symbol+'-EQ'
-            return (token, exch, symbol)
+            return (token, symbol_res, exch)
 
 
 def getSymbolFromNse(normalized_name: str, original_name: str, threshold: int = 90):
@@ -85,10 +84,10 @@ def getTokenFromAngelMaster(symbol: str):
     if required_df.empty:
         required_df = df[df["symbol"] == symbol]
         if required_df.empty:
-            return (None, None)
-        return (required_df['token'].item(), required_df['exch_seg'].item())
+            return (None, None, None)
+        return (required_df['token'].item(), symbol, required_df['exch_seg'].item())
     else:
-        return (required_df['token'].item(), required_df['exch_seg'].item())
+        return (required_df['token'].item(), symbol+'-EQ',required_df['exch_seg'].item())
     
 # def getSymbolFromName(name: str, threshold: int = 90, exch: str = 'nse'):
 #     normalized_name = normalize_company_name(name)

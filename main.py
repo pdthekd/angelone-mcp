@@ -107,9 +107,9 @@ async def getCandle(param: StockInput):
             fromdate_str = param.fromdate.strftime("%Y-%m-%d %H:%M")
             todate_str = param.todate.strftime("%Y-%m-%d %H:%M")
             if param.isSymbol:
-                token, exch = getTokenFromAngelMaster(param.entity)
+                token, symbol, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+                token, symbol, exch = getTokenFromName(param.entity, threshold=int(threshold))
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
             historicParam={
@@ -157,10 +157,9 @@ async def buy_stock_sll(param: BuyStockSLL):
             return {"success": False, "error": "data status is false"}
         else:
             if param.isSymbol:
-                token, exch = getTokenFromAngelMaster(param.entity)
-                symbol = param.entity
+                token, symbol, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+                token, symbol, exch = getTokenFromName(param.entity, threshold=int(threshold))
             
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
@@ -232,10 +231,9 @@ async def buy_stock_slm(param: BuyStockSLM):
             return {"success": False, "error": "data status is false"}
         else:
             if param.isSymbol:
-                token, exch = getTokenFromAngelMaster(param.entity)
-                symbol = param.entity
+                token, symbol, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+                token, symbol, exch = getTokenFromName(param.entity, threshold=int(threshold))
             
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
@@ -307,10 +305,9 @@ async def sell_stock_sll(param: SellStockSLL):
             return {"success": False, "error": "data status is false"}
         else:
             if param.isSymbol:
-                token, exch = getTokenFromAngelMaster(param.entity)
-                symbol = param.entity
+                token, symbol, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+                token, symbol, exch = getTokenFromName(param.entity, threshold=int(threshold))
             
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
@@ -318,13 +315,14 @@ async def sell_stock_sll(param: SellStockSLL):
             holdings = smartApi.allholding()
             holdings_list = holdings.get("data", {}).get("holdings", [])
             current_quantity = 0
+            symbol_temp = symbol
             if symbol.endswith('-EQ'):
                 symbol = symbol[:-3]
             for h in holdings_list:
                 if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == symbol + '-EQ') and h.get("exchange") == exch:
                     current_quantity = float(h.get("quantity", 0))
                     break
-            
+            symbol = symbol_temp
             if current_quantity == 0:
                 return {
                     "success": False, 
@@ -409,27 +407,34 @@ async def sell_stock_slm(param: SellStockSLM):
             return {"success": False, "error": "data status is false"}
         else:
             if param.isSymbol:
-                token, exch = getTokenFromAngelMaster(param.entity)
-                symbol = param.entity
+                token, symbol, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+                token, symbol, exch = getTokenFromName(param.entity, threshold=int(threshold))
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
             
             holdings = smartApi.allholding()
             holdings_list = holdings.get("data", {}).get("holdings", [])
             current_quantity = 0
+            symbol_temp = symbol
             if symbol.endswith('-EQ'):
                 symbol = symbol[:-3]
             for h in holdings_list:
                 if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == symbol + '-EQ') and h.get("exchange") == exch:
                     current_quantity = float(h.get("quantity", 0))
                     break
-            
-            if current_quantity < param.quantity:
+            symbol = symbol_temp
+            if current_quantity == 0:
                 return {
                     "success": False, 
-                    "error": f"Insufficient quantity. You have {current_quantity} but trying to sell {param.quantity}"
+                    "error": f"No holdings found for {param.entity}"
+                }
+            sell_quantity = int(current_quantity) if param.sell_all else param.quantity
+            
+            if current_quantity < sell_quantity:
+                return {
+                    "success": False, 
+                    "error": f"Insufficient quantity. You have {current_quantity} but trying to sell {sell_quantity}"
                 }
             
             orderparams = {
@@ -443,7 +448,7 @@ async def sell_stock_slm(param: SellStockSLM):
                 "duration": "DAY",
                 "price": "0",
                 "triggerprice": param.trigger_price,
-                "quantity": param.quantity
+                "quantity": sell_quantity
             }
             
             order_response = make_api_call(smartApi, 'placeOrder', orderparams)
@@ -456,7 +461,7 @@ async def sell_stock_slm(param: SellStockSLM):
                     "details": {
                         "entity": param.entity,
                         "symbol": symbol,
-                        "quantity": param.quantity,
+                        "quantity": sell_quantity,
                         "trigger_price": param.trigger_price,
                         "exchange": exch
                     }
@@ -469,7 +474,7 @@ async def sell_stock_slm(param: SellStockSLM):
                     "details": {
                         "entity": param.entity,
                         "symbol": symbol,
-                        "quantity": param.quantity,
+                        "quantity": sell_quantity,
                         "trigger_price": param.trigger_price,
                         "exchange": exch
                     }
@@ -500,10 +505,9 @@ async def target_sell(param: TargetSell):
             return {"success": False, "error": "data status is false"}
         else:
             if param.isSymbol:
-                token, exch = getTokenFromAngelMaster(param.entity)
-                symbol = param.entity
+                token, symbol, exch = getTokenFromAngelMaster(param.entity)
             else:
-                token, exch, symbol = getTokenFromName(param.entity, threshold=int(threshold))
+                token, symbol, exch = getTokenFromName(param.entity, threshold=int(threshold))
             
             if not token or not exch:
                 raise Exception("No such company registered in NSE or BSE")
@@ -511,16 +515,24 @@ async def target_sell(param: TargetSell):
             holdings = smartApi.allholding()
             holdings_list = holdings.get("data", {}).get("holdings", [])
             current_quantity = 0
+            symbol_temp = symbol
             if symbol.endswith('-EQ'):
                 symbol = symbol[:-3]
             for h in holdings_list:
                 if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == symbol + '-EQ') and h.get("exchange") == exch:
                     current_quantity = float(h.get("quantity", 0))
-                    break            
-            if current_quantity < param.quantity:
+                    break
+            symbol = symbol_temp
+            if current_quantity == 0:
                 return {
                     "success": False, 
-                    "error": f"Insufficient quantity. You have {current_quantity} but trying to sell {param.quantity}"
+                    "error": f"No holdings found for {param.entity}"
+                }
+            sell_quantity = int(current_quantity) if param.sell_all else param.quantity
+            if current_quantity < sell_quantity:
+                return {
+                    "success": False, 
+                    "error": f"Insufficient quantity. You have {current_quantity} but trying to sell {sell_quantity}"
                 }
             
             orderparams = {
@@ -533,7 +545,7 @@ async def target_sell(param: TargetSell):
                 "producttype": "DELIVERY",
                 "duration": "DAY",
                 "price": param.target_price,
-                "quantity": param.quantity
+                "quantity": sell_quantity
             }
             
             order_response = make_api_call(smartApi, 'placeOrder', orderparams)
@@ -546,7 +558,7 @@ async def target_sell(param: TargetSell):
                     "details": {
                         "entity": param.entity,
                         "symbol": symbol,
-                        "quantity": param.quantity,
+                        "quantity": sell_quantity,
                         "target_price": param.target_price,
                         "exchange": exch
                     }
@@ -559,7 +571,7 @@ async def target_sell(param: TargetSell):
                     "details": {
                         "entity": param.entity,
                         "symbol": symbol,
-                        "quantity": param.quantity,
+                        "quantity": sell_quantity,
                         "target_price": param.target_price,
                         "exchange": exch
                     }
@@ -586,8 +598,6 @@ async def cancel_order(param: CancelOrder):
         if data['status'] == False:
             return {"success": False, "error": "data status is false"}
         else:
-            # cancel_response = smartApi.cancelOrder(param.order_id, param.variety)
-
             cancel_response = make_api_call(smartApi, 'cancelOrder', param.order_id, param.variety)
             
             if isinstance(cancel_response, str):
