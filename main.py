@@ -618,3 +618,54 @@ async def cancel_order(param: CancelOrder):
             
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@app.get('/pendingOrders')
+async def get_pending_orders():
+    try:
+        load_dotenv()
+        api_key = os.environ.get('api_key')
+        username = os.environ.get('username')
+        pwd = os.environ.get('pwd')
+        token = os.environ.get('token')
+        
+        smartApi = SmartConnect(api_key)
+        totp = pyotp.TOTP(token).now()
+        data = make_api_call(smartApi, 'generateSession', username, pwd, totp)
+        
+        if data['status'] == False:
+            return {"success": False, "error": "data status is false"}
+        else:
+            orders = smartApi.orderBook()
+            
+            if not orders.get('status'):
+                return {"success": False, "error": "Failed to fetch orders"}
+            
+            orders_list = orders.get("data", [])
+            pending_orders = []
+            
+            for order in orders_list:
+                status = order.get("status", "").lower()
+                if status in ["open", "trigger pending", "pending"]:
+                    pending_orders.append({
+                        "order_id": order.get("orderid"),
+                        "symbol": order.get("tradingsymbol"),
+                        "exchange": order.get("exchange"),
+                        "transaction_type": order.get("transactiontype"),
+                        "order_type": order.get("ordertype"),
+                        "product_type": order.get("producttype"),
+                        "quantity": order.get("quantity"),
+                        "price": order.get("price"),
+                        "trigger_price": order.get("triggerprice"),
+                        "status": order.get("status"),
+                        "variety": order.get("variety"),
+                        "order_time": order.get("updatetime")
+                    })
+            
+            return {
+                "success": True,
+                "pending_orders": pending_orders,
+                "count": len(pending_orders)
+            }
+                                                                                        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
