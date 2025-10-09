@@ -9,18 +9,18 @@ def getTokenFromName(name: str, threshold: int = 90):
     normalized_name = normalize_company_name(name)
     symbol = getSymbolFromNse(normalized_name=normalized_name, original_name=name, threshold=threshold)
     if not symbol:
-        token = getTokenFromBse(normalized_name=normalized_name, original_name=name, threshold=threshold)
+        token, symbol = getTokenFromBse(normalized_name=normalized_name, original_name=name, threshold=threshold)
         if not token:
-            return (None, None)
+            return (None, None, None)
         else:
-            return (token, "bse")
+            return (token, symbol, "bse")
     else:
-        token, exch = getTokenFromAngelMaster(symbol=symbol+'-EQ')
+        token, symbol_res, exch = getTokenFromAngelMaster(symbol=symbol+'-EQ')
         if not token and not exch:
-            token, exch = getTokenFromAngelMaster(symbol=symbol)
-            return (token, exch)
+            token, symbol_res, exch = getTokenFromAngelMaster(symbol=symbol)
+            return (token, symbol_res, exch)
         else:
-            return (token, exch)
+            return (token, symbol_res, exch)
 
 
 def getSymbolFromNse(normalized_name: str, original_name: str, threshold: int = 90):
@@ -67,19 +67,36 @@ def getTokenFromBse(normalized_name: str, original_name: str, threshold: int = 9
                 best_match_row = row
         
         if best_match_row is not None:
-            return best_match_row['token']
+            return best_match_row['token'], best_match_row['symbol']
         else:
-            return None
+            return None, None
     else:
-        return required_df['token'].iloc[0]
+        return required_df['token'].iloc[0], required_df['symbol'].iloc[0]
     
 def getTokenFromAngelMaster(symbol: str):
     try:
         df = pd.read_csv(os.path.join(MAPPINGS_FOLDER, 'angelOneMaster', 'master_mapping.csv'))
     except FileNotFoundError:
         df = pd.read_csv(os.path.join(MAPPINGS_FOLDER, 'angelOneMaster', 'master_mapping_default.csv'))
-    required_df = df[df["symbol"] == symbol]
+    if symbol.endswith('-EQ'):
+        symbol = symbol[:-3]
+    required_df = df[df["symbol"] == symbol+'-EQ']
     if required_df.empty:
-        return (None, None)
+        required_df = df[df["symbol"] == symbol]
+        if required_df.empty:
+            return (None, None, None)
+        return (required_df['token'].item(), symbol, required_df['exch_seg'].item())
     else:
-        return (required_df['token'].item(), required_df['exch_seg'].item())
+        return (required_df['token'].item(), symbol+'-EQ',required_df['exch_seg'].item())
+    
+# def getSymbolFromName(name: str, threshold: int = 90, exch: str = 'nse'):
+#     normalized_name = normalize_company_name(name)
+#     if exch == 'nse':
+#         symbol = getSymbolFromNse(normalized_name=normalized_name, original_name=name, threshold=threshold)
+#         return symbol
+#     elif exch == 'bse':
+#         token = getTokenFromBse(normalized_name=normalized_name, original_name=name, threshold=threshold)
+#         return token
+#     else:
+#         return None
+    
