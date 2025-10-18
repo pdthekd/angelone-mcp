@@ -1,0 +1,23 @@
+[project]
+name = "angelone-mcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bsedata>=0.6.0",
+    "fastapi[standard]>=0.119.0",
+    "fuzzywuzzy>=0.18.0",
+    "logzero>=1.7.0",
+    "pandas>=2.3.3",
+    "pyotp>=2.9.0",
+    "python-dotenv>=1.1.1",
+    "requests>=2.32.5",
+    "smartapi-python>=1.5.5",
+    "websocket-client>=1.9.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "src/angel_one_mcp",
+]
