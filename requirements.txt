@@ -9,3 +9,4 @@ pandas
 requests
 bsedata
 fuzzywuzzy
+mcp[cli]
