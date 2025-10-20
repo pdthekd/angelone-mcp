@@ -1,12 +1,10 @@
-from fastapi import FastAPI
-from type import BuyStockSLL, BuyStockSLM, CancelOrder, SellStockSLL, SellStockSLM, StockInput, TargetSell
-from utils.retry_helper_decorator import retry_with_backoff
-from utils.getTokens import getTokenFromAngelMaster, getTokenFromName
-from utils.sessionManager import SessionManager
+from .type import BuyStockSLL, BuyStockSLM, CancelOrder, SellStockSLL, SellStockSLM, StockInput, TargetSell
+from .utils.retry_helper_decorator import retry_with_backoff
+from .utils.getTokens import getTokenFromAngelMaster, getTokenFromName
+from .utils.sessionManager import SessionManager
 from mcp.server.fastmcp import FastMCP
 from mcp import McpError
 
-app = FastAPI()
 session_manager = SessionManager()
 mcp = FastMCP("angel_one_mcp")
 
@@ -587,3 +585,9 @@ async def cancel_order(param: CancelOrder):
             
     except Exception as e:
         raise McpError(f"Failed to cancel order: {str(e)}")
+    
+def main():
+    mcp.run(transport='stdio')
+
+if __name__ == "__main__":
+    main()

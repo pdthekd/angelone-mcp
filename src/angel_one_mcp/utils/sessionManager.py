@@ -4,7 +4,7 @@ from SmartApi import SmartConnect
 import pyotp
 from dotenv import load_dotenv
 import os
-from utils.retry_helper_decorator import retry_with_backoff
+from .retry_helper_decorator import retry_with_backoff
 
 class SessionManager:
     def __init__(self):

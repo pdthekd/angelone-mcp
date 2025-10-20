@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "bsedata>=0.6.0",
-    "fastapi[standard]>=0.119.0",
     "fuzzywuzzy>=0.18.0",
     "logzero>=1.7.0",
     "mcp[cli]>=1.18.0",
@@ -17,3 +16,13 @@ dependencies = [
     "smartapi-python>=1.5.5",
     "websocket-client>=1.9.0",
 ]
+
+[project.scripts]
+angelone-mcp = "angel_one_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/angel_one_mcp"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

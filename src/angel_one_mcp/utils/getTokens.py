@@ -2,7 +2,7 @@ import pandas as pd
 import os
 from fuzzywuzzy import fuzz
 
-from utils.normalize import normalize_company_name
+from .normalize import normalize_company_name
 
 MAPPINGS_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, 'mappings'))
 def getTokenFromName(name: str, threshold: int = 90):
@@ -89,14 +89,4 @@ def getTokenFromAngelMaster(symbol: str):
     else:
         return (required_df['token'].item(), symbol+'-EQ',required_df['exch_seg'].item())
     
-# def getSymbolFromName(name: str, threshold: int = 90, exch: str = 'nse'):
-#     normalized_name = normalize_company_name(name)
-#     if exch == 'nse':
-#         symbol = getSymbolFromNse(normalized_name=normalized_name, original_name=name, threshold=threshold)
-#         return symbol
-#     elif exch == 'bse':
-#         token = getTokenFromBse(normalized_name=normalized_name, original_name=name, threshold=threshold)
-#         return token
-#     else:
-#         return None
     
