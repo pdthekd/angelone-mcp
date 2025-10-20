@@ -14,7 +14,7 @@ def make_api_call(smartApi, method_name, *args, **kwargs):
     return method(*args, **kwargs)
 
 
-@mcp.resource("exchanges://current")
+@mcp.tool()
 async def get_exchanges():
     """
     Get the list of available exchanges for the user. It would return exchanges like NSE, BSE etc.
@@ -28,7 +28,7 @@ async def get_exchanges():
         raise McpError(f"Failed to get available exchanges: {str(e)}")
     
 
-@mcp.resource("holdings://current")
+@mcp.tool()
 async def current_holdings():
     """
     Get the current holdings of the user.
