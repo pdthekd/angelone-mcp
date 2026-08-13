@@ -27,7 +27,6 @@ class StockInput(BaseModel):
     todate: datetime = Field(..., example="2021-02-08 09:16", description="End date and time for data retrieval")
     isSymbol: bool = Field(..., example=True, description="If True, 'entity' is treated as symbol; otherwise as name")
 
-
 class BuyStockSLL(BaseModel):
     entity: str = Field(..., example="SBIN-EQ", description="Stock name or symbol to buy")
     quantity: int = Field(..., gt=0, example=10, description="Quantity of stocks to buy")
@@ -68,3 +67,8 @@ class TargetSell(BaseModel):
 class CancelOrder(BaseModel):
     order_id: str = Field(..., example="241008000012345", description="Order ID of the order to be cancelled")
     variety: str = Field(default="NORMAL", example="NORMAL", description="Variety of the order, e.g., NORMAL, AMO")
+
+# New model used by approve_trade tool:
+class ApproveTrade(BaseModel):
+    request_id: str = Field(..., description="ID of pending trade intent to execute")
+    approval_code: str = Field(..., description="Operator approval token: TOTP or HMAC signature")
