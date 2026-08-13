@@ -1,5 +1,3 @@
-
-```python name=src/angel_one_mcp/server.py
 # -*- coding: utf-8 -*-
 import re
 import uuid
@@ -7,6 +5,8 @@ import os
 import hmac
 import hashlib
 import pyotp
+from typing import Optional
+
 from .type import (
     BuyStockSLL,
     BuyStockSLM,
@@ -27,7 +27,7 @@ session_manager = SessionManager()
 mcp = FastMCP("angel_one_mcp")
 
 # Global pending trades store
-PENDING_TRADES = {}  # request_id -> { "action": "placeOrder"|"cancelOrder", "orderparams": {...}, "meta": {...} }
+PENDING_TRADES: dict = {}  # request_id -> { "action": "placeOrder"|"cancelOrder", "orderparams": {...}, "meta": {...} }
 
 
 @retry_with_backoff(max_retries=3, base_delay=2)
@@ -179,7 +179,9 @@ async def get_stock_details(param: StockInput):
         if param.isSymbol:
             token, symbol, exch = getTokenFromAngelMaster(param.entity)
         else:
-            token, symbol, exch = getTokenFromName(param.entity, threshold=int(session_manager.threshold))
+            # session_manager.threshold may be None; default threshold safe-cast
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
         if not token or not exch:
             raise Exception("No such company registered in NSE or BSE")
         historicParam = {
@@ -211,7 +213,7 @@ async def get_stock_details(param: StockInput):
 #
 # Write tools (create pending trade intents instead of executing)
 #
-def _store_pending_trade(action: str, orderparams: dict, meta: dict = None) -> str:
+def _store_pending_trade(action: str, orderparams: dict, meta: Optional[dict] = None) -> str:
     request_id = uuid.uuid4().hex[:8]
     PENDING_TRADES[request_id] = {
         "action": action,
@@ -231,7 +233,8 @@ async def buy_stock_sll(param: BuyStockSLL):
         if param.isSymbol:
             token, symbol, exch = getTokenFromAngelMaster(param.entity)
         else:
-            token, symbol, exch = getTokenFromName(param.entity, threshold=int(session_manager.threshold))
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
 
         if not token or not exch:
             raise Exception("No such company registered in NSE or BSE")
@@ -273,7 +276,8 @@ async def buy_stock_slm(param: BuyStockSLM):
         if param.isSymbol:
             token, symbol, exch = getTokenFromAngelMaster(param.entity)
         else:
-            token, symbol, exch = getTokenFromName(param.entity, threshold=int(session_manager.threshold))
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
 
         if not token or not exch:
             raise Exception("No such company registered in NSE or BSE")
@@ -313,4 +317,308 @@ async def sell_stock_sll(param: SellStockSLL):
     try:
         symbol = None
         if param.isSymbol:
-            token, symbol, exch = getToken
+            token, symbol, exch = getTokenFromAngelMaster(param.entity)
+        else:
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
+
+        if not token or not exch:
+            raise Exception("No such company registered in NSE or BSE")
+
+        # validate holdings for sell_all or quantity
+        smart_api = session_manager.get_api()
+        holdings = make_api_call(smart_api, 'allholding')
+        holdings_list = holdings.get("data", {}).get("holdings", [])
+        current_quantity = 0
+        symbol_temp = symbol
+        if symbol and symbol.endswith('-EQ'):
+            symbol = symbol[:-3]
+        for h in holdings_list:
+            if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == (symbol + '-EQ')) and h.get("exchange") == exch:
+                current_quantity = float(h.get("quantity", 0))
+                break
+        symbol = symbol_temp
+        if current_quantity == 0:
+            raise Exception(f"No holdings found for {param.entity}")
+
+        sell_quantity = int(current_quantity) if param.sell_all else param.quantity
+
+        if current_quantity < sell_quantity:
+            raise Exception(f"Insufficient quantity. You have {current_quantity} but trying to sell {sell_quantity}")
+
+        orderparams = {
+            "variety": "STOPLOSS",
+            "tradingsymbol": symbol,
+            "symboltoken": token,
+            "transactiontype": "SELL",
+            "exchange": exch,
+            "ordertype": "STOPLOSS_LIMIT",
+            "producttype": "DELIVERY",
+            "duration": "DAY",
+            "price": param.limit_price,
+            "triggerprice": param.trigger_price,
+            "quantity": sell_quantity
+        }
+
+        meta = {
+            "type": "sell_stock_sll",
+            "entity": param.entity,
+            "symbol": symbol,
+            "exchange": exch,
+            "quantity": sell_quantity
+        }
+        request_id = _store_pending_trade("placeOrder", orderparams, meta)
+        return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise McpError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def sell_stock_slm(param: SellStockSLM):
+    """
+    Create a Stop Loss Market (SL-M) Sell order intent. DOES NOT EXECUTE.
+    """
+    try:
+        symbol = None
+        if param.isSymbol:
+            token, symbol, exch = getTokenFromAngelMaster(param.entity)
+        else:
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
+        if not token or not exch:
+            raise Exception("No such company registered in NSE or BSE")
+
+        smart_api = session_manager.get_api()
+        holdings = make_api_call(smart_api, 'allholding')
+        holdings_list = holdings.get("data", {}).get("holdings", [])
+        current_quantity = 0
+        symbol_temp = symbol
+        if symbol and symbol.endswith('-EQ'):
+            symbol = symbol[:-3]
+        for h in holdings_list:
+            if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == (symbol + '-EQ')) and h.get("exchange") == exch:
+                current_quantity = float(h.get("quantity", 0))
+                break
+        symbol = symbol_temp
+        if current_quantity == 0:
+            raise Exception(f"No holdings found for {param.entity}")
+        sell_quantity = int(current_quantity) if param.sell_all else param.quantity
+
+        if current_quantity < sell_quantity:
+            raise Exception(f"Insufficient quantity. You have {current_quantity} but trying to sell {sell_quantity}")
+
+        orderparams = {
+            "variety": "STOPLOSS",
+            "tradingsymbol": symbol,
+            "symboltoken": token,
+            "transactiontype": "SELL",
+            "exchange": exch,
+            "ordertype": "STOPLOSS_MARKET",
+            "producttype": "DELIVERY",
+            "duration": "DAY",
+            "price": "0",
+            "triggerprice": param.trigger_price,
+            "quantity": sell_quantity
+        }
+
+        meta = {
+            "type": "sell_stock_slm",
+            "entity": param.entity,
+            "symbol": symbol,
+            "exchange": exch,
+            "quantity": sell_quantity
+        }
+        request_id = _store_pending_trade("placeOrder", orderparams, meta)
+        return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise McpError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def target_sell(param: TargetSell):
+    """
+    Create a Target Sell order intent. DOES NOT EXECUTE.
+    """
+    try:
+        symbol = None
+        if param.isSymbol:
+            token, symbol, exch = getTokenFromAngelMaster(param.entity)
+        else:
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
+
+        if not token or not exch:
+            raise Exception("No such company registered in NSE or BSE")
+
+        smart_api = session_manager.get_api()
+        holdings = make_api_call(smart_api, 'allholding')
+        holdings_list = holdings.get("data", {}).get("holdings", [])
+        current_quantity = 0
+        symbol_temp = symbol
+        if symbol and symbol.endswith('-EQ'):
+            symbol = symbol[:-3]
+        for h in holdings_list:
+            if (h.get("tradingsymbol") == symbol or h.get("tradingsymbol") == (symbol + '-EQ')) and h.get("exchange") == exch:
+                current_quantity = float(h.get("quantity", 0))
+                break
+        symbol = symbol_temp
+        if current_quantity == 0:
+            raise Exception(f"No holdings found for {param.entity}")
+        sell_quantity = int(current_quantity) if param.sell_all else param.quantity
+        if current_quantity < sell_quantity:
+            raise Exception(f"Insufficient quantity. You have {current_quantity} but trying to sell {sell_quantity}")
+
+        orderparams = {
+            "variety": "NORMAL",
+            "tradingsymbol": symbol,
+            "symboltoken": token,
+            "transactiontype": "SELL",
+            "exchange": exch,
+            "ordertype": "LIMIT",
+            "producttype": "DELIVERY",
+            "duration": "DAY",
+            "price": param.target_price,
+            "quantity": sell_quantity
+        }
+
+        meta = {
+            "type": "target_sell",
+            "entity": param.entity,
+            "symbol": symbol,
+            "exchange": exch,
+            "quantity": sell_quantity
+        }
+        request_id = _store_pending_trade("placeOrder", orderparams, meta)
+        return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise McpError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def cancel_order(param: CancelOrder):
+    """
+    Create a cancel-order intent. DOES NOT EXECUTE.
+    """
+    try:
+        # store cancel intent for approval
+        order_id = param.order_id
+        variety = param.variety or "NORMAL"
+        orderparams = {
+            "order_id": order_id,
+            "variety": variety
+        }
+        meta = {
+            "type": "cancel_order",
+            "order_id": order_id,
+            "variety": variety
+        }
+        request_id = _store_pending_trade("cancelOrder", orderparams, meta)
+        return f"⚠️ CANCEL INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise McpError(f"Error: {safe_error_message(e)}")
+
+
+#
+# Approval helper and tool
+#
+def _verify_approval_token(request_id: str, approval_code: str) -> bool:
+    """
+    Verify an approval token. Supported methods:
+    - TOTP: if env var APPROVE_TOTP_SECRET is set, code is validated as TOTP
+    - HMAC: if env var APPROVE_HMAC_SECRET is set, code is compared against HMAC_SHA256(secret, request_id).hexdigest()
+
+    If REQUIRE_APPROVE_AUTH is 'false' (case-insensitive), verification is bypassed (not recommended).
+    """
+    try:
+        require_flag = os.getenv('REQUIRE_APPROVE_AUTH', 'true').lower()
+        if require_flag in ('0', 'false', 'no'):
+            return True
+
+        # Try TOTP if configured
+        totp_secret = os.getenv('APPROVE_TOTP_SECRET')
+        if totp_secret:
+            try:
+                totp = pyotp.TOTP(totp_secret)
+                if totp.verify(approval_code, valid_window=1):
+                    return True
+            except Exception:
+                # fall-through to other methods
+                pass
+
+        # Try HMAC if configured
+        hmac_secret = os.getenv('APPROVE_HMAC_SECRET')
+        if hmac_secret:
+            try:
+                expected = hmac.new(hmac_secret.encode('utf-8'), request_id.encode('utf-8'), hashlib.sha256).hexdigest()
+                if hmac.compare_digest(expected, approval_code):
+                    return True
+            except Exception:
+                pass
+
+        return False
+    except Exception:
+        return False
+
+
+@mcp.tool()
+async def approve_trade(param: ApproveTrade):
+    """
+    Approves and executes a previously created trade intent.
+    Requires operator approval token (TOTP or HMAC) unless REQUIRE_APPROVE_AUTH=false.
+    """
+    try:
+        request_id = param.request_id
+        approval_code = param.approval_code
+
+        if not request_id or request_id not in PENDING_TRADES:
+            raise Exception("Invalid or unknown request_id")
+
+        # Verify operator authorization
+        if not _verify_approval_token(request_id, approval_code):
+            raise Exception("Approval verification failed: invalid approval token")
+
+        # pop to avoid double execution
+        intent = PENDING_TRADES.pop(request_id, None)
+        if intent is None:
+            raise Exception("Intent not found or already executed")
+
+        action = intent.get("action")
+        params = intent.get("orderparams", {})
+        smart_api = session_manager.get_api()
+
+        if action == "placeOrder":
+            # Execute placeOrder and return minimal sanitized result
+            order_response = make_api_call(smart_api, 'placeOrder', params)
+            # Attempt to extract an order id safely
+            if isinstance(order_response, str):
+                order_id = order_response
+            elif isinstance(order_response, dict) and order_response.get('status'):
+                order_id = order_response.get('data', {}).get('orderid')
+            else:
+                err_msg = order_response.get('message') if isinstance(order_response, dict) else str(order_response)
+                raise Exception(f"Order placement failed: {err_msg}")
+
+            return {"success": True, "order_id": order_id, "message": "Order executed successfully (see audit logs for details)"}
+
+        elif action == "cancelOrder":
+            cancel_response = make_api_call(smart_api, 'cancelOrder', params.get("order_id"), params.get("variety"))
+            if isinstance(cancel_response, str):
+                return {"success": True, "message": "Order cancelled successfully", "order_id": params.get("order_id")}
+            elif isinstance(cancel_response, dict) and cancel_response.get('status'):
+                return {"success": True, "message": "Order cancelled successfully", "order_id": params.get("order_id")}
+            else:
+                err_msg = cancel_response.get('message') if isinstance(cancel_response, dict) else str(cancel_response)
+                raise Exception(f"Order cancellation failed: {err_msg}")
+        else:
+            raise Exception("Unsupported intent action")
+    except Exception as e:
+        # On error, do not return raw exception content
+        raise McpError(f"Error: {safe_error_message(e)}")
+
+
+def main():
+    mcp.run(transport='stdio')
+
+
+if __name__ == "__main__":
+    main()
