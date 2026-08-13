@@ -80,7 +80,6 @@ async def get_exchanges():
     try:
         smart_api = session_manager.get_api()
         res = make_api_call(smart_api, "getProfile", session_manager.refresh_token)
-        # sanitize any sensitive tokens inside returned structure
         return redact_sensitive_keys(res.get("data", {}).get("exchanges", []))
     except Exception as e:
         raise McpError(f"Error: {safe_error_message(e)}")
@@ -91,7 +90,6 @@ async def current_holdings():
     try:
         smart_api = session_manager.get_api()
         holdings = make_api_call(smart_api, "allholding")
-        # sanitize the API response before using/returning
         holdings = redact_sensitive_keys(holdings)
         holdings_list = (holdings.get("data", {}).get("holdings", []))
         totals = holdings.get("data", {}).get("totalholding", {})
@@ -415,75 +413,75 @@ async def cancel_order(param: CancelOrder):
 
 
 #
-# Approval tool: requires HUMAN_APPROVAL_PIN
+# Approval tool: requires HUMAN_APPROVAL_PIN and operator identity
 #
 @mcp.tool()
-async def approve_trade(request_id: str, auth_pin: str):
+async def approve_trade(request_id: str, auth_pin: str, operator: str):
     """
     Approves and executes a previously created trade intent.
     Requires HUMAN_APPROVAL_PIN (set in environment). Uses hmac.compare_digest for constant-time compare.
+    Records operator identity and requires ALLOWED_OPERATORS check if configured.
     """
     try:
         if not request_id:
             raise Exception("Missing request_id")
         if not auth_pin:
             raise Exception("Missing auth_pin")
+        if not operator:
+            raise Exception("Missing operator identity")
 
         human_pin = os.getenv("HUMAN_APPROVAL_PIN")
         if not human_pin:
-            # Administrator forgot to set env var — audit and fail
-            db_utils.log_audit_event("approval_error", {"request_id": request_id, "reason": "HUMAN_APPROVAL_PIN not configured"})
+            db_utils.log_audit_event("approval_error", {"request_id": request_id, "reason": "HUMAN_APPROVAL_PIN not configured", "operator": operator})
             raise Exception("Operator approval not configured on server")
 
-        # constant-time compare
+        # constant-time compare for PIN
         if not hmac.compare_digest(human_pin, auth_pin):
-            db_utils.log_audit_event("approval_failed_auth", {"request_id": request_id})
+            db_utils.log_audit_event("approval_failed_auth", {"request_id": request_id, "operator": operator})
             raise Exception("Authentication failed: invalid human PIN")
 
-        # fetch intent
+        # Validate operator against ALLOWED_OPERATORS if configured
+        allowed = os.getenv("ALLOWED_OPERATORS", "").strip()
+        if allowed:
+            allowed_set = {s.strip() for s in allowed.split(",") if s.strip()}
+            if operator not in allowed_set:
+                db_utils.log_audit_event("approval_failed_operator", {"request_id": request_id, "operator": operator})
+                raise Exception("Operator not allowed")
+
         intent = db_utils.get_trade_intent(request_id)
         if not intent:
             raise Exception("Invalid or unknown request_id")
         if intent.get("status") != "PENDING":
             raise Exception(f"Intent not in PENDING state (current: {intent.get('status')})")
 
-        db_utils.log_audit_event("approval_succeeded", {"request_id": request_id})
+        db_utils.log_audit_event("approval_succeeded", {"request_id": request_id, "operator": operator})
 
         action = intent.get("meta", {}).get("type", "placeOrder")
-        params = intent.get("order_params") or intent.get("order_params") or intent.get("order_params")  # defensive
-        # older rows may store order_params under order_params key; ensure variable
-        if not params:
-            # attempt to read order_params from row structure with different key
-            params = intent.get("order_params") or intent.get("order_params")
-
+        params = intent.get("order_params") or intent.get("order_params")  # defensive
         smart_api = session_manager.get_api()
 
         try:
-            if action == "cancel_order" or action == "cancelOrder":
-                # cancelOrder expects orderid and variety: our stored params have order_id and variety
+            if action in ("cancel_order", "cancelOrder"):
                 cancel_response = make_api_call(smart_api, "cancelOrder", params.get("order_id"), params.get("variety"))
                 cancel_response = redact_sensitive_keys(cancel_response)
-                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": cancel_response})
-                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "cancelOrder", "result": cancel_response})
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": cancel_response}, approved_by=operator)
+                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "cancelOrder", "result": cancel_response, "operator": operator})
                 return {"success": True, "message": "Order cancelled successfully (see audit logs for details)"}
             else:
-                # placeOrder
                 order_response = make_api_call(smart_api, "placeOrder", params)
                 order_response = redact_sensitive_keys(order_response)
-                # determine order id
                 order_id = None
                 if isinstance(order_response, str):
                     order_id = order_response
                 elif isinstance(order_response, dict) and order_response.get("status"):
                     order_id = order_response.get("data", {}).get("orderid")
-                # mark executed
-                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": order_response})
-                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "placeOrder", "result": order_response})
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": order_response}, approved_by=operator)
+                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "placeOrder", "result": order_response, "operator": operator})
                 return {"success": True, "order_id": order_id, "message": "Order executed successfully (see audit logs for details)"}
         except Exception as ex:
             err_msg = safe_error_message(ex)
-            db_utils.update_trade_intent_status(request_id, "FAILED", {"error": err_msg})
-            db_utils.log_audit_event("intent_failed", {"request_id": request_id, "error": err_msg})
+            db_utils.update_trade_intent_status(request_id, "FAILED", {"error": err_msg}, approved_by=operator)
+            db_utils.log_audit_event("intent_failed", {"request_id": request_id, "error": err_msg, "operator": operator})
             raise Exception(f"Execution failed: {err_msg}")
     except Exception as e:
         raise McpError(f"Error: {safe_error_message(e)}")
