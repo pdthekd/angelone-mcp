@@ -4,7 +4,15 @@ from SmartApi import SmartConnect
 import pyotp
 from dotenv import load_dotenv
 import os
+from pathlib import Path
 from .retry_helper_decorator import retry_with_backoff
+
+# Force the working directory to the project root to prevent SmartApi's hardcoded
+# relative "logs" folder from attempting to write to protected Windows directories.
+# sessionManager.py lives at src/angel_one_mcp/utils/, so the project root is 4
+# parents up (utils -> angel_one_mcp -> src -> root), not 3.
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+os.chdir(str(BASE_DIR))
 
 class SessionManager:
     def __init__(self):
@@ -24,6 +32,11 @@ class SessionManager:
         return method(*args, **kwargs)
     
     def create_session(self):
+        # Re-anchor the working directory immediately before instantiating
+        # SmartConnect, since it writes to a "logs" folder relative to the
+        # process cwd at construction time, and cwd is mutable global state
+        # that other code could have changed since the module was imported.
+        os.chdir(str(BASE_DIR))
         self.smart_api = SmartConnect(self.api_key)
         totp = pyotp.TOTP(self.token).now()
         data = self._api_call('generateSession', self.username, self.pwd, totp)

@@ -6,6 +6,7 @@ import os
 import hmac
 import hashlib
 import json
+from pathlib import Path
 from typing import Optional
 
 from .type import (
@@ -23,13 +24,13 @@ from .utils.sessionManager import SessionManager
 from .utils import db as db_utils
 from .utils.sanitizer import redact_sensitive_keys
 from mcp.server.fastmcp import FastMCP
-from mcp import McpError
 
 session_manager = SessionManager()
 mcp = FastMCP("angel_one_mcp")
 
-# Initialize DB (path configurable via TRADE_DB_PATH)
-DB_PATH = os.getenv("TRADE_DB_PATH", "./trades_audit.db")
+# Compute the absolute root path of the repository
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DB_PATH = os.getenv("TRADE_DB_PATH", str(BASE_DIR / "trades_audit.db"))
 db_utils.init_db(DB_PATH)
 
 
@@ -82,7 +83,7 @@ async def get_exchanges():
         res = make_api_call(smart_api, "getProfile", session_manager.refresh_token)
         return redact_sensitive_keys(res.get("data", {}).get("exchanges", []))
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -116,7 +117,7 @@ async def current_holdings():
             }
         }
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -150,7 +151,7 @@ async def get_pending_orders():
                 })
         return {"success": True, "pending_orders": pending_orders, "count": len(pending_orders)}
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -190,7 +191,7 @@ async def get_stock_details(param: StockInput):
         }
         return response
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 #
@@ -223,7 +224,7 @@ async def buy_stock_sll(param: BuyStockSLL):
         request_id = _create_intent_and_audit("placeOrder", orderparams, meta)
         return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -253,7 +254,7 @@ async def buy_stock_slm(param: BuyStockSLM):
         request_id = _create_intent_and_audit("placeOrder", orderparams, meta)
         return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -301,7 +302,7 @@ async def sell_stock_sll(param: SellStockSLL):
         request_id = _create_intent_and_audit("placeOrder", orderparams, meta)
         return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -349,7 +350,7 @@ async def sell_stock_slm(param: SellStockSLM):
         request_id = _create_intent_and_audit("placeOrder", orderparams, meta)
         return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -396,7 +397,7 @@ async def target_sell(param: TargetSell):
         request_id = _create_intent_and_audit("placeOrder", orderparams, meta)
         return f"⚠️ TRADE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 @mcp.tool()
@@ -409,7 +410,7 @@ async def cancel_order(param: CancelOrder):
         request_id = _create_intent_and_audit("cancelOrder", orderparams, meta)
         return f"⚠️ CANCEL INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 #
@@ -464,7 +465,7 @@ async def approve_trade(request_id: str, auth_pin: str, operator: str):
             if action in ("cancel_order", "cancelOrder"):
                 cancel_response = make_api_call(smart_api, "cancelOrder", params.get("order_id"), params.get("variety"))
                 cancel_response = redact_sensitive_keys(cancel_response)
-                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": cancel_response}, approved_by=operator)
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": cancel_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "cancelOrder", "result": cancel_response, "operator": operator})
                 return {"success": True, "message": "Order cancelled successfully (see audit logs for details)"}
             else:
@@ -475,16 +476,16 @@ async def approve_trade(request_id: str, auth_pin: str, operator: str):
                     order_id = order_response
                 elif isinstance(order_response, dict) and order_response.get("status"):
                     order_id = order_response.get("data", {}).get("orderid")
-                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": order_response}, approved_by=operator)
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": order_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "placeOrder", "result": order_response, "operator": operator})
                 return {"success": True, "order_id": order_id, "message": "Order executed successfully (see audit logs for details)"}
         except Exception as ex:
             err_msg = safe_error_message(ex)
-            db_utils.update_trade_intent_status(request_id, "FAILED", {"error": err_msg}, approved_by=operator)
+            db_utils.update_trade_intent_status(request_id, "FAILED", {"error": err_msg})
             db_utils.log_audit_event("intent_failed", {"request_id": request_id, "error": err_msg, "operator": operator})
             raise Exception(f"Execution failed: {err_msg}")
     except Exception as e:
-        raise McpError(f"Error: {safe_error_message(e)}")
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
 def main():

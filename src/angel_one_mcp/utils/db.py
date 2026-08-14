@@ -22,7 +22,12 @@ def init_db(db_path: Optional[str] = None):
     global _DB_PATH, _CONN
     if db_path is None:
         db_path = os.getenv("TRADE_DB_PATH", "./trades_audit.db")
-    _DB_PATH = db_path
+        
+    # Ensure the parent directory exists before creating the database file
+    abs_path = os.path.abspath(db_path)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    _DB_PATH = abs_path
+    
     _CONN = sqlite3.connect(_DB_PATH, check_same_thread=False)
     _CONN.row_factory = sqlite3.Row
     cur = _CONN.cursor()
