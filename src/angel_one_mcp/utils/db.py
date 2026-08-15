@@ -159,3 +159,35 @@ def log_audit_event(event_type: str, details: Dict[str, Any]):
         (event_type, ts, details_json, signature),
     )
     conn.commit()
+
+
+def get_recent_audit_events(limit: int = 50) -> List[Dict[str, Any]]:
+    """Fetch recent audit events from the audit_log table, ordered by timestamp DESC."""
+    global _CONN
+    if _CONN is None:
+        raise Exception("Database not initialized. Call init_db() first.")
+    cur = _CONN.cursor()
+    cur.execute(
+        """
+        SELECT event_type, timestamp, details, signature
+        FROM audit_log
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """,
+        (limit,)
+    )
+    rows = cur.fetchall()
+    events = []
+    for row in rows:
+        event_type, timestamp, details_json, signature = row
+        try:
+            details = json.loads(details_json)
+        except (json.JSONDecodeError, TypeError):
+            details = {}
+        events.append({
+            "event_type": event_type,
+            "timestamp": timestamp,
+            "details": details,
+            "signature": signature
+        })
+    return events

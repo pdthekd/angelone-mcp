@@ -488,6 +488,133 @@ async def approve_trade(request_id: str, auth_pin: str, operator: str):
         raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
+@mcp.tool()
+async def get_trade_book():
+    """
+    Fetch all executed trades for the day from Angel One.
+    """
+    try:
+        smart_api = session_manager.get_api()
+        res = make_api_call(smart_api, "tradeBook")
+
+        # Ensure response is a dict
+        if isinstance(res, str):
+            res = json.loads(res)
+
+        res = redact_sensitive_keys(res)
+
+        if not isinstance(res, dict):
+            return {"success": False, "message": "Unexpected response format", "trades": []}
+
+        trades = res.get("data")
+        # Handle case where API returns None or empty data
+        if trades is None:
+            trades = []
+        elif not isinstance(trades, list):
+            trades = []
+
+        return {"success": True, "trades": trades, "count": len(trades)}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_audit_history(limit: int = 50):
+    """
+    Fetch recent local audit log entries from trades_audit.db.
+    """
+    try:
+        events = db_utils.get_recent_audit_events(limit=limit)
+        return {"success": True, "events": events, "count": len(events)}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_portfolio_analysis():
+    """
+    Calculate weightage and concentration across all holdings.
+    """
+    try:
+        smart_api = session_manager.get_api()
+        res = make_api_call(smart_api, "allholding")
+
+        # Ensure response is parsed JSON dict
+        if isinstance(res, str):
+            res = json.loads(res)
+
+        res = redact_sensitive_keys(res)
+
+        if not isinstance(res, dict):
+            raise Exception("Invalid response received from broker API")
+
+        data = res.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
+
+        holdings_list = data.get("holdings", []) or []
+        totals = data.get("totalholding", {}) or {}
+
+        # Calculate total portfolio value (current market value of all holdings)
+        total_portfolio_value = sum(
+            float(h.get("quantity", 0)) * float(h.get("ltp", 0))
+            for h in holdings_list if isinstance(h, dict)
+        )
+        # Fallback: use API-provided total if calculation returns 0
+        if total_portfolio_value == 0:
+            try:
+                total_portfolio_value = float(totals.get("totalholdingvalue", 0))
+            except (ValueError, TypeError):
+                total_portfolio_value = 0
+
+        if total_portfolio_value <= 0:
+            return {
+                "success": True,
+                "total_portfolio_value": 0,
+                "holdings_weightage": [],
+                "top_5_concentrated": []
+            }
+
+        analyzed_holdings = []
+        for h in holdings_list:
+            if not isinstance(h, dict):
+                continue
+
+            try:
+                qty = float(h.get("quantity", 0))
+                ltp = float(h.get("ltp", 0))
+                holding_val = qty * ltp
+            except (ValueError, TypeError):
+                holding_val = 0.0
+
+            weight_pct = round((holding_val / total_portfolio_value) * 100, 2)
+
+            analyzed_holdings.append({
+                "symbol": h.get("tradingsymbol", "UNKNOWN"),
+                "exchange": h.get("exchange", ""),
+                "quantity": qty,
+                "ltp": ltp,
+                "current_value": round(holding_val, 2),
+                "weight_percentage": weight_pct,
+                "pnl": h.get("profitandloss", 0),
+                "pnl_percentage": h.get("pnlpercentage", 0)
+            })
+
+        # Sort from highest weight to lowest weight
+        analyzed_holdings.sort(key=lambda x: x["weight_percentage"], reverse=True)
+
+        return {
+            "success": True,
+            "total_portfolio_value": round(total_portfolio_value, 2),
+            "total_invested_value": totals.get("totalinvvalue", 0),
+            "total_pnl": totals.get("totalprofitandloss", 0),
+            "holdings_weightage": analyzed_holdings,
+            "top_5_concentrated": analyzed_holdings[:5]
+        }
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
 def main():
     mcp.run(transport="stdio")
 

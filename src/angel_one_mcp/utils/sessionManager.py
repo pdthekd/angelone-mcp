@@ -16,7 +16,7 @@ os.chdir(str(BASE_DIR))
 
 class SessionManager:
     def __init__(self):
-        load_dotenv()
+        load_dotenv(override=True)
         self.smart_api: Optional[SmartConnect] = None
         self.refresh_token: Optional[str] = None
         self.session_expiry: Optional[datetime] = None
@@ -40,10 +40,10 @@ class SessionManager:
         self.smart_api = SmartConnect(self.api_key)
         totp = pyotp.TOTP(self.token).now()
         data = self._api_call('generateSession', self.username, self.pwd, totp)
-        
+
         if not data.get('status'):
-            raise Exception("Session generation failed")
-        
+            raise Exception(f"Session generation failed. Response: {data}")
+    
         self.refresh_token = data['data']['refreshToken']
         self.smart_api.generateToken(self.refresh_token)
         self.session_expiry = datetime.now() + timedelta(hours=6)
