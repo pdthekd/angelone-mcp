@@ -14,3 +14,10 @@ wheels/
 
 # logs
 logs/
+
+# test scripts
+test_api.py
+test_candle.py
+
+# runtime database (live audit trail, must never be checked in)
+trades_audit.db

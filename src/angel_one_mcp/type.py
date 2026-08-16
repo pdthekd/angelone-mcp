@@ -73,3 +73,35 @@ class CancelOrder(BaseModel):
 class ApproveTrade(BaseModel):
     request_id: str = Field(..., description="ID of pending trade intent to execute")
     approval_code: str = Field(..., description="Operator approval token: TOTP or HMAC signature")
+
+class GttTransactionType(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+class GttProductType(str, Enum):
+    DELIVERY = "DELIVERY"
+    MARGIN = "MARGIN"
+
+class LTPRequest(BaseModel):
+    entity: str = Field(..., description="Stock name or symbol to get last traded price for", json_schema_extra={"example": "SBIN-EQ"})
+    isSymbol: bool = Field(default=True, description="If True, 'entity' is treated as symbol; otherwise as name")
+
+class CreateGTTRule(BaseModel):
+    entity: str = Field(..., description="Stock name or symbol", json_schema_extra={"example": "SBIN-EQ"})
+    transaction_type: GttTransactionType = Field(..., description="BUY or SELL")
+    product_type: GttProductType = Field(default=GttProductType.DELIVERY, description="GTT only supports DELIVERY or MARGIN")
+    quantity: int = Field(..., gt=0, description="Quantity to transact when the rule triggers", json_schema_extra={"example": 1})
+    price: float = Field(..., gt=0, description="Order price to place once the rule triggers", json_schema_extra={"example": 195.0})
+    trigger_price: float = Field(..., gt=0, description="Price at which the GTT rule triggers", json_schema_extra={"example": 196.0})
+    disclosed_qty: int = Field(default=0, ge=0, description="Disclosed quantity", json_schema_extra={"example": 0})
+    isSymbol: bool = Field(default=True, description="If True, 'entity' is treated as symbol; otherwise as name")
+
+class ModifyGTTRule(BaseModel):
+    rule_id: str = Field(..., description="GTT rule ID to modify", json_schema_extra={"example": "1"})
+    quantity: int = Field(..., gt=0, description="New quantity", json_schema_extra={"example": 1})
+    price: float = Field(..., gt=0, description="New order price", json_schema_extra={"example": 195.0})
+    trigger_price: float = Field(..., gt=0, description="New trigger price", json_schema_extra={"example": 196.0})
+    disclosed_qty: int = Field(default=0, ge=0, description="Disclosed quantity", json_schema_extra={"example": 0})
+
+class CancelGTTRule(BaseModel):
+    rule_id: str = Field(..., description="GTT rule ID to cancel", json_schema_extra={"example": "1"})

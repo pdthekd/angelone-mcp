@@ -12,7 +12,11 @@ from typing import Optional
 from .type import (
     BuyStockSLL,
     BuyStockSLM,
+    CancelGTTRule,
     CancelOrder,
+    CreateGTTRule,
+    LTPRequest,
+    ModifyGTTRule,
     SellStockSLL,
     SellStockSLM,
     StockInput,
@@ -64,6 +68,44 @@ def safe_error_message(e: Exception) -> str:
         msg = msg[:1000] + '...<TRUNCATED>'
 
     return msg
+
+
+# SmartAPI error codes -> human-readable description (see errorcode.md)
+ANGEL_ERROR_CODES = {
+    "AG8001": "Invalid session token", "AG8002": "Session token expired", "AG8003": "Session token missing",
+    "AB8050": "Invalid refresh token", "AB8051": "Refresh token expired",
+    "AB1000": "Invalid email or password", "AB1001": "Invalid email", "AB1002": "Invalid password length",
+    "AB1003": "Client already exists", "AB1004": "Angel One servers are having issues, try again shortly",
+    "AB1005": "User type must be USER", "AB1006": "Account is blocked for trading",
+    "AB1007": "Exchange (AMX) error", "AB1008": "Invalid order variety", "AB1009": "Symbol not found on exchange",
+    "AB1010": "Exchange session expired", "AB1011": "Client not logged in", "AB1012": "Invalid product type",
+    "AB1013": "Order not found", "AB1014": "Trade not found", "AB1015": "Holding not found",
+    "AB1016": "Position not found", "AB1017": "Position conversion failed", "AB1018": "Failed to get symbol details",
+    "AB2000": "Unspecified broker error", "AB2001": "Internal error, try again shortly",
+    "AB1031": "Old password mismatch", "AB1032": "User not found", "AB2002": "ROBO (bracket) orders are blocked",
+    "AB4008": "Order tag must be under 20 characters",
+    "AB9000": "GTT: internal server error", "AB9001": "GTT: invalid parameters", "AB9002": "GTT: method not allowed",
+    "AB9003": "GTT: invalid client ID", "AB9004": "GTT: invalid status array size", "AB9005": "GTT: invalid session ID",
+    "AB9006": "GTT: invalid order quantity", "AB9007": "GTT: invalid disclosed quantity", "AB9008": "GTT: invalid price",
+    "AB9009": "GTT: invalid trigger price", "AB9010": "GTT: invalid exchange segment", "AB9011": "GTT: invalid symbol token",
+    "AB9012": "GTT: invalid trading symbol", "AB9013": "GTT: invalid rule ID", "AB9014": "GTT: invalid order side",
+    "AB9015": "GTT: invalid product type", "AB9016": "GTT: invalid time period", "AB9017": "GTT: invalid page value",
+    "AB9018": "GTT: invalid count value",
+}
+
+
+def _raise_for_broker_error(response, context: str = ""):
+    """Raise a descriptive exception if a broker response indicates failure."""
+    if not isinstance(response, dict):
+        raise Exception(f"{context}: unexpected response format from broker" if context else "Unexpected response format from broker")
+    if response.get("status"):
+        return
+    errorcode = response.get("errorcode") or ""
+    message = response.get("message") or "Unknown broker error"
+    description = ANGEL_ERROR_CODES.get(errorcode)
+    detail = f"{message} (errorcode={errorcode}" + (f": {description}" if description else "") + ")"
+    prefix = f"{context}: " if context else ""
+    raise Exception(f"{prefix}{detail}")
 
 
 def _create_intent_and_audit(action: str, orderparams: dict, meta: Optional[dict] = None) -> str:
@@ -150,6 +192,121 @@ async def get_pending_orders():
                     "order_time": order.get("updatetime")
                 })
         return {"success": True, "pending_orders": pending_orders, "count": len(pending_orders)}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_order_history():
+    """Fetch the full order book for the day, across all statuses (complete, rejected, cancelled, open, etc.).
+
+    Use this to verify whether a specific order actually executed, rather than
+    guessing from a holdings snapshot.
+    """
+    try:
+        smart_api = session_manager.get_api()
+        orders = make_api_call(smart_api, "orderBook")
+        orders = redact_sensitive_keys(orders)
+        _raise_for_broker_error(orders, "Failed to fetch order book")
+
+        orders_list = orders.get("data") or []
+        history = [
+            {
+                "order_id": o.get("orderid"),
+                "unique_order_id": o.get("uniqueorderid"),
+                "symbol": o.get("tradingsymbol"),
+                "exchange": o.get("exchange"),
+                "transaction_type": o.get("transactiontype"),
+                "order_type": o.get("ordertype"),
+                "product_type": o.get("producttype"),
+                "quantity": o.get("quantity"),
+                "filled_shares": o.get("filledshares"),
+                "unfilled_shares": o.get("unfilledshares"),
+                "average_price": o.get("averageprice"),
+                "price": o.get("price"),
+                "trigger_price": o.get("triggerprice"),
+                "status": o.get("status"),
+                "order_status": o.get("orderstatus"),
+                "text": o.get("text"),
+                "update_time": o.get("updatetime"),
+            }
+            for o in orders_list
+        ]
+        return {"success": True, "orders": history, "count": len(history)}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_order_status(unique_order_id: str):
+    """Fetch the exact status of a single order by its unique_order_id (returned when the order was placed/modified/cancelled)."""
+    try:
+        if not unique_order_id:
+            raise Exception("Missing unique_order_id")
+        smart_api = session_manager.get_api()
+        res = make_api_call(smart_api, "individual_order_details", unique_order_id)
+        if isinstance(res, str):
+            res = json.loads(res)
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch order status")
+        return {"success": True, "order": res.get("data") or {}}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_ltp(param: LTPRequest):
+    """Fetch the last traded price for a single stock, without pulling the full holdings payload."""
+    try:
+        smart_api = session_manager.get_api()
+        if param.isSymbol:
+            token, symbol, exch = getTokenFromAngelMaster(param.entity)
+        else:
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
+        if not token or not exch:
+            raise Exception("No such company registered in NSE or BSE")
+
+        res = make_api_call(smart_api, "ltpData", exch, symbol, token)
+        if isinstance(res, str):
+            res = json.loads(res)
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch LTP")
+        return {"success": True, "quote": res.get("data") or {}}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_gtt_rules(status: Optional[list[str]] = None, page: int = 1, count: int = 50):
+    """List GTT (Good Till Trigger) rules. status filters by e.g. NEW, ACTIVE, CANCELLED, SENTTOEXCHANGE (default: all)."""
+    try:
+        smart_api = session_manager.get_api()
+        status_list = status or ["NEW", "ACTIVE", "SENTTOEXCHANGE", "CANCELLED", "FORALL"]
+        res = make_api_call(smart_api, "gttLists", status_list, page, count)
+        if isinstance(res, str):
+            res = json.loads(res)
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch GTT rules")
+        rules = res.get("data") or []
+        return {"success": True, "rules": rules, "count": len(rules)}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_gtt_rule_details(rule_id: str):
+    """Fetch full details of a single GTT rule by its rule_id."""
+    try:
+        if not rule_id:
+            raise Exception("Missing rule_id")
+        smart_api = session_manager.get_api()
+        res = make_api_call(smart_api, "gttDetails", rule_id)
+        if isinstance(res, str):
+            res = json.loads(res)
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch GTT rule details")
+        return {"success": True, "rule": res.get("data") or {}}
     except Exception as e:
         raise RuntimeError(f"Error: {safe_error_message(e)}")
 
@@ -413,6 +570,101 @@ async def cancel_order(param: CancelOrder):
         raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
+@mcp.tool()
+async def create_gtt_rule(param: CreateGTTRule):
+    """Create a GTT (Good Till Trigger) rule — a standing conditional order that persists for up to a year,
+    unlike a regular limit order which expires at end of day. Useful for target sell ladders.
+    Creates a pending intent; call approve_trade to actually place it with the broker.
+    """
+    try:
+        if param.isSymbol:
+            token, symbol, exch = getTokenFromAngelMaster(param.entity)
+        else:
+            threshold_val = int(session_manager.threshold) if session_manager.threshold else 80
+            token, symbol, exch = getTokenFromName(param.entity, threshold=threshold_val)
+        if not token or not exch:
+            raise Exception("No such company registered in NSE or BSE")
+        if exch not in ("NSE", "BSE"):
+            raise Exception("GTT currently only supports NSE and BSE")
+
+        gttparams = {
+            "tradingsymbol": symbol,
+            "symboltoken": token,
+            "exchange": exch,
+            "transactiontype": param.transaction_type.value,
+            "producttype": param.product_type.value,
+            "price": param.price,
+            "qty": param.quantity,
+            "triggerprice": param.trigger_price,
+            "disclosedqty": param.disclosed_qty,
+        }
+        meta = {"type": "gttCreateRule", "entity": param.entity, "symbol": symbol, "exchange": exch, "quantity": param.quantity}
+        request_id = _create_intent_and_audit("gttCreateRule", gttparams, meta)
+        return f"⚠️ GTT CREATE INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def modify_gtt_rule(param: ModifyGTTRule):
+    """Modify an existing GTT rule's price/quantity/trigger price.
+    Creates a pending intent; call approve_trade to actually apply it with the broker.
+    """
+    try:
+        smart_api = session_manager.get_api()
+        existing = make_api_call(smart_api, "gttDetails", param.rule_id)
+        if isinstance(existing, str):
+            existing = json.loads(existing)
+        existing = redact_sensitive_keys(existing)
+        _raise_for_broker_error(existing, "Failed to fetch existing GTT rule")
+        rule = existing.get("data") or {}
+        if not rule:
+            raise Exception(f"GTT rule {param.rule_id} not found")
+
+        gttparams = {
+            "id": param.rule_id,
+            "symboltoken": rule.get("symboltoken"),
+            "exchange": rule.get("exchange"),
+            "price": param.price,
+            "qty": param.quantity,
+            "triggerprice": param.trigger_price,
+            "disclosedqty": param.disclosed_qty,
+        }
+        meta = {"type": "gttModifyRule", "rule_id": param.rule_id, "symbol": rule.get("tradingsymbol"), "exchange": rule.get("exchange")}
+        request_id = _create_intent_and_audit("gttModifyRule", gttparams, meta)
+        return f"⚠️ GTT MODIFY INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def cancel_gtt_rule(param: CancelGTTRule):
+    """Cancel an existing GTT rule.
+    Creates a pending intent; call approve_trade to actually cancel it with the broker.
+    """
+    try:
+        smart_api = session_manager.get_api()
+        existing = make_api_call(smart_api, "gttDetails", param.rule_id)
+        if isinstance(existing, str):
+            existing = json.loads(existing)
+        existing = redact_sensitive_keys(existing)
+        _raise_for_broker_error(existing, "Failed to fetch existing GTT rule")
+        rule = existing.get("data") or {}
+        if not rule:
+            raise Exception(f"GTT rule {param.rule_id} not found")
+
+        gttparams = {
+            "id": param.rule_id,
+            "symboltoken": rule.get("symboltoken"),
+            "exchange": rule.get("exchange"),
+        }
+        meta = {"type": "gttCancelRule", "rule_id": param.rule_id, "symbol": rule.get("tradingsymbol"), "exchange": rule.get("exchange")}
+        request_id = _create_intent_and_audit("gttCancelRule", gttparams, meta)
+        return f"⚠️ GTT CANCEL INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
 #
 # Approval tool: requires HUMAN_APPROVAL_PIN and operator identity
 #
@@ -468,6 +720,32 @@ async def approve_trade(request_id: str, auth_pin: str, operator: str):
                 db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": cancel_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "cancelOrder", "result": cancel_response, "operator": operator})
                 return {"success": True, "message": "Order cancelled successfully (see audit logs for details)"}
+            elif action == "gttCreateRule":
+                # NOTE: SmartApi's gttCreateRule() wrapper returns response['data']['id'] directly
+                # and throws an unhandled TypeError on failure (data is null). Call _postRequest
+                # directly instead so we get the full envelope and can surface a real error message.
+                gtt_response = make_api_call(smart_api, "_postRequest", "api.gtt.create", params)
+                gtt_response = redact_sensitive_keys(gtt_response)
+                _raise_for_broker_error(gtt_response, "GTT create failed")
+                rule_id = (gtt_response.get("data") or {}).get("id")
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": gtt_response})
+                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "gttCreateRule", "result": gtt_response, "operator": operator})
+                return {"success": True, "rule_id": rule_id, "message": "GTT rule created successfully (see audit logs for details)"}
+            elif action == "gttModifyRule":
+                # Same reasoning as gttCreateRule above: bypass the wrapper's unsafe ['data']['id'] unwrap.
+                gtt_response = make_api_call(smart_api, "_postRequest", "api.gtt.modify", params)
+                gtt_response = redact_sensitive_keys(gtt_response)
+                _raise_for_broker_error(gtt_response, "GTT modify failed")
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": gtt_response})
+                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "gttModifyRule", "result": gtt_response, "operator": operator})
+                return {"success": True, "message": "GTT rule modified successfully (see audit logs for details)"}
+            elif action == "gttCancelRule":
+                gtt_response = make_api_call(smart_api, "gttCancelRule", params)
+                gtt_response = redact_sensitive_keys(gtt_response)
+                _raise_for_broker_error(gtt_response, "GTT cancel failed")
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": gtt_response})
+                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "gttCancelRule", "result": gtt_response, "operator": operator})
+                return {"success": True, "message": "GTT rule cancelled successfully (see audit logs for details)"}
             else:
                 order_response = make_api_call(smart_api, "placeOrder", params)
                 order_response = redact_sensitive_keys(order_response)
