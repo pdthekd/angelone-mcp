@@ -6,6 +6,7 @@ import os
 import hmac
 import hashlib
 import json
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -587,6 +588,37 @@ async def create_gtt_rule(param: CreateGTTRule):
         if exch not in ("NSE", "BSE"):
             raise Exception("GTT currently only supports NSE and BSE")
 
+        if not param.allow_duplicate:
+            duplicates = []
+
+            local_matches = db_utils.find_open_gtt_create_intents(symbol, exch, param.transaction_type.value)
+            for m in local_matches:
+                duplicates.append(
+                    f"local intent {m['request_id']} ({m['status']}): price={m['price']} trigger={m['trigger_price']} qty={m['qty']}"
+                )
+
+            smart_api = session_manager.get_api()
+            live = make_api_call(smart_api, "gttLists", ["NEW", "ACTIVE", "SENTTOEXCHANGE"], 1, 100)
+            live = redact_sensitive_keys(live) if isinstance(live, dict) else live
+            if isinstance(live, dict) and live.get("status"):
+                for rule in (live.get("data") or []):
+                    if (
+                        rule.get("tradingsymbol") == symbol
+                        and rule.get("exchange") == exch
+                        and rule.get("transactiontype") == param.transaction_type.value
+                    ):
+                        duplicates.append(
+                            f"live rule id={rule.get('id')} ({rule.get('status')}): price={rule.get('price')} trigger={rule.get('triggerprice')} qty={rule.get('qty')}"
+                        )
+
+            if duplicates:
+                raise Exception(
+                    f"A GTT {param.transaction_type.value} rule already exists for {symbol} on {exch}: "
+                    + "; ".join(duplicates)
+                    + ". Review/cancel it with cancel_gtt_rule, adjust it with modify_gtt_rule, "
+                    "or pass allow_duplicate=true to create another one anyway."
+                )
+
         gttparams = {
             "tradingsymbol": symbol,
             "symboltoken": token,
@@ -666,32 +698,273 @@ async def cancel_gtt_rule(param: CancelGTTRule):
 
 
 #
-# Approval tool: requires HUMAN_APPROVAL_PIN and operator identity
+# Human-in-the-loop approval: a local, out-of-band PIN prompt.
 #
+# The PIN never passes through an MCP tool argument or return value, so it
+# never enters the calling LLM's context. request_trade_approval() pops a
+# native OS dialog on the operator's own desktop (outside the chat/MCP
+# channel entirely); the PIN is captured and verified inside this server
+# process, and only the resulting PENDING -> HUMAN_APPROVED transition is
+# visible to callers. approve_trade() then requires that transition to have
+# already happened before it will touch the broker.
+#
+def _prompt_for_pin_and_approve(request_id: str, summary: str):
+    """Runs in a background thread. Shows a native PIN dialog and verifies it
+    server-side. The PIN itself is never returned to the MCP caller."""
+    import tkinter as tk
+    from tkinter import simpledialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        pin = simpledialog.askstring(
+            "Approve Trade",
+            f"Trade request {request_id}\n{summary}\n\nEnter approval PIN to authorize:",
+            show="*",
+            parent=root,
+        )
+    finally:
+        root.destroy()
+
+    if pin is None:
+        db_utils.log_audit_event("human_approval_cancelled", {"request_id": request_id})
+        return
+
+    human_pin = os.getenv("HUMAN_APPROVAL_PIN")
+    if not human_pin:
+        db_utils.log_audit_event("approval_error", {"request_id": request_id, "reason": "HUMAN_APPROVAL_PIN not configured"})
+        return
+
+    if hmac.compare_digest(human_pin, pin):
+        db_utils.mark_human_approved(request_id)
+        db_utils.log_audit_event("human_approval_granted", {"request_id": request_id})
+    else:
+        db_utils.log_audit_event("human_approval_denied", {"request_id": request_id})
+
+
 @mcp.tool()
-async def approve_trade(request_id: str, auth_pin: str, operator: str):
+async def request_trade_approval(request_id: str):
     """
-    Approves and executes a previously created trade intent.
-    Requires HUMAN_APPROVAL_PIN (set in environment). Uses hmac.compare_digest for constant-time compare.
+    Show a local PIN-entry dialog on the operator's own desktop to authorize a
+    pending trade intent. The PIN is typed directly into that dialog, never into
+    this chat, and is verified inside this server process — it is never passed
+    as a tool argument or returned to the caller.
+
+    Returns immediately; the dialog appears in the background. After the human
+    responds, call approve_trade(request_id, operator) to actually execute it
+    (or get_trade_intent_status(request_id) to check first).
+    """
+    try:
+        if not request_id:
+            raise Exception("Missing request_id")
+        intent = db_utils.get_trade_intent(request_id)
+        if not intent:
+            raise Exception("Invalid or unknown request_id")
+        if intent.get("status") != "PENDING":
+            raise Exception(f"Intent not in PENDING state (current: {intent.get('status')})")
+
+        try:
+            import tkinter  # noqa: F401
+        except ImportError:
+            raise Exception("tkinter is not available on this system; cannot show a local PIN prompt")
+
+        meta = intent.get("meta") or {}
+        p = intent.get("order_params") or {}
+        summary = (
+            f"{meta.get('type', 'order')} {p.get('tradingsymbol') or meta.get('symbol', '')} "
+            f"{p.get('transactiontype', '')} qty={p.get('qty') or p.get('quantity') or meta.get('quantity', '')} "
+            f"price={p.get('price', '')} trigger={p.get('triggerprice', '')}"
+        ).strip()
+
+        db_utils.log_audit_event("human_approval_requested", {"request_id": request_id, "summary": summary})
+        threading.Thread(target=_prompt_for_pin_and_approve, args=(request_id, summary), daemon=True).start()
+
+        return {
+            "success": True,
+            "message": f"PIN prompt shown on the operator's screen for request {request_id}. "
+                       f"Waiting for the human to respond there — call approve_trade once they do."
+        }
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+def _prompt_for_pin_and_approve_batch(request_ids: list, summaries: list):
+    """Runs in a background thread. Shows ONE native dialog listing every pending
+    trade in the batch plus a single PIN field, so approving many trades at once
+    doesn't require a separate popup (and separate PIN entry) per trade."""
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Approve Trades")
+    dialog.attributes("-topmost", True)
+
+    tk.Label(dialog, text=f"Approve {len(request_ids)} trade(s)?", font=("Segoe UI", 10, "bold")).pack(padx=12, pady=(12, 4))
+
+    text = tk.Text(dialog, width=70, height=min(20, len(summaries) + 1), wrap="none")
+    text.insert("1.0", "\n".join(summaries))
+    text.config(state="disabled")
+    text.pack(padx=12, pady=4)
+
+    tk.Label(dialog, text="Enter approval PIN to authorize ALL listed trades:").pack(padx=12, pady=(8, 0))
+    pin_var = tk.StringVar()
+    entry = tk.Entry(dialog, textvariable=pin_var, show="*")
+    entry.pack(padx=12, pady=4)
+    entry.focus()
+
+    result = {"pin": None}
+
+    def on_ok():
+        result["pin"] = pin_var.get()
+        dialog.destroy()
+
+    def on_cancel():
+        result["pin"] = None
+        dialog.destroy()
+
+    btn_frame = tk.Frame(dialog)
+    btn_frame.pack(pady=(4, 12))
+    tk.Button(btn_frame, text="Approve All", command=on_ok).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="left", padx=5)
+    dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+    entry.bind("<Return>", lambda e: on_ok())
+
+    dialog.grab_set()
+    root.wait_window(dialog)
+    root.destroy()
+
+    pin = result["pin"]
+    if pin is None:
+        for rid in request_ids:
+            db_utils.log_audit_event("human_approval_cancelled", {"request_id": rid, "batch": True})
+        return
+
+    human_pin = os.getenv("HUMAN_APPROVAL_PIN")
+    if not human_pin:
+        for rid in request_ids:
+            db_utils.log_audit_event("approval_error", {"request_id": rid, "reason": "HUMAN_APPROVAL_PIN not configured", "batch": True})
+        return
+
+    if hmac.compare_digest(human_pin, pin):
+        for rid in request_ids:
+            db_utils.mark_human_approved(rid)
+            db_utils.log_audit_event("human_approval_granted", {"request_id": rid, "batch": True})
+    else:
+        for rid in request_ids:
+            db_utils.log_audit_event("human_approval_denied", {"request_id": rid, "batch": True})
+
+
+@mcp.tool()
+async def request_batch_trade_approval(request_ids: list[str]):
+    """
+    Show ONE local PIN-entry dialog listing every given pending trade intent, so
+    the operator reviews the whole batch and approves it with a single PIN entry
+    instead of one popup per trade. Intents that aren't currently PENDING are
+    skipped and reported back rather than silently dropped.
+
+    Returns immediately; the dialog appears in the background. After the human
+    responds, call approve_trade(request_id, operator) for each included
+    request_id to actually execute it.
+    """
+    try:
+        if not request_ids:
+            raise Exception("Missing request_ids")
+
+        valid_ids = []
+        summaries = []
+        skipped = []
+        for rid in request_ids:
+            intent = db_utils.get_trade_intent(rid)
+            if not intent or intent.get("status") != "PENDING":
+                skipped.append({"request_id": rid, "status": intent.get("status") if intent else "NOT_FOUND"})
+                continue
+            params = intent.get("order_params") or {}
+            meta = intent.get("meta") or {}
+            symbol = params.get("tradingsymbol") or meta.get("symbol") or "?"
+            side = params.get("transactiontype", "")
+            qty = params.get("qty") or params.get("quantity") or meta.get("quantity") or ""
+            price = params.get("price", "")
+            trigger = params.get("triggerprice", "")
+            summaries.append(f"{rid}  {symbol:14s} {side:5s} qty={qty!s:>5} price={price!s:>8} trigger={trigger!s:>8}")
+            valid_ids.append(rid)
+
+        if not valid_ids:
+            raise Exception("None of the given request_ids are PENDING")
+
+        try:
+            import tkinter  # noqa: F401
+        except ImportError:
+            raise Exception("tkinter is not available on this system; cannot show a local PIN prompt")
+
+        db_utils.log_audit_event("human_approval_requested", {"request_ids": valid_ids, "batch": True, "count": len(valid_ids)})
+        threading.Thread(target=_prompt_for_pin_and_approve_batch, args=(valid_ids, summaries), daemon=True).start()
+
+        return {
+            "success": True,
+            "message": f"One PIN prompt shown for {len(valid_ids)} trade(s). Waiting for the human to respond.",
+            "included": valid_ids,
+            "skipped": skipped,
+        }
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_trade_intent_status(request_id: str):
+    """Check a trade intent's status: PENDING, HUMAN_APPROVED, EXECUTED, or FAILED."""
+    try:
+        if not request_id:
+            raise Exception("Missing request_id")
+        intent = db_utils.get_trade_intent(request_id)
+        if not intent:
+            raise Exception("Invalid or unknown request_id")
+        return {"success": True, "request_id": request_id, "status": intent.get("status"), "created_at": intent.get("created_at")}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def discard_trade_intent(request_id: str, reason: str):
+    """Mark a PENDING or HUMAN_APPROVED trade intent as DISCARDED so it stops
+    cluttering the pending list. This only touches the local intent DB — it
+    never calls the broker, so it's safe to use for intents that were superseded
+    (e.g. the position was placed manually elsewhere) or created by mistake.
+    Cannot discard an intent that has already been EXECUTED — that's a real
+    trade and the audit record for it must stay intact.
+    """
+    try:
+        if not request_id:
+            raise Exception("Missing request_id")
+        if not reason:
+            raise Exception("Missing reason")
+        intent = db_utils.get_trade_intent(request_id)
+        if not intent:
+            raise Exception("Invalid or unknown request_id")
+        if intent.get("status") not in ("PENDING", "HUMAN_APPROVED"):
+            raise Exception(f"Cannot discard an intent in status {intent.get('status')} (only PENDING/HUMAN_APPROVED can be discarded)")
+
+        db_utils.update_trade_intent_status(request_id, "DISCARDED", {"reason": reason})
+        db_utils.log_audit_event("intent_discarded", {"request_id": request_id, "reason": reason})
+        return {"success": True, "request_id": request_id, "status": "DISCARDED"}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def approve_trade(request_id: str, operator: str):
+    """
+    Executes a trade intent that a human has already approved via request_trade_approval.
     Records operator identity and requires ALLOWED_OPERATORS check if configured.
     """
     try:
         if not request_id:
             raise Exception("Missing request_id")
-        if not auth_pin:
-            raise Exception("Missing auth_pin")
         if not operator:
             raise Exception("Missing operator identity")
-
-        human_pin = os.getenv("HUMAN_APPROVAL_PIN")
-        if not human_pin:
-            db_utils.log_audit_event("approval_error", {"request_id": request_id, "reason": "HUMAN_APPROVAL_PIN not configured", "operator": operator})
-            raise Exception("Operator approval not configured on server")
-
-        # constant-time compare for PIN
-        if not hmac.compare_digest(human_pin, auth_pin):
-            db_utils.log_audit_event("approval_failed_auth", {"request_id": request_id, "operator": operator})
-            raise Exception("Authentication failed: invalid human PIN")
 
         # Validate operator against ALLOWED_OPERATORS if configured
         allowed = os.getenv("ALLOWED_OPERATORS", "").strip()
@@ -704,8 +977,22 @@ async def approve_trade(request_id: str, auth_pin: str, operator: str):
         intent = db_utils.get_trade_intent(request_id)
         if not intent:
             raise Exception("Invalid or unknown request_id")
-        if intent.get("status") != "PENDING":
-            raise Exception(f"Intent not in PENDING state (current: {intent.get('status')})")
+        if intent.get("status") != "HUMAN_APPROVED":
+            raise Exception(
+                f"Trade not yet approved by a human (current status: {intent.get('status')}). "
+                f"Call request_trade_approval first and wait for the PIN prompt to be completed."
+            )
+
+        # Atomic claim: only one caller can move HUMAN_APPROVED -> EXECUTING, so a
+        # retry or concurrent call can never send the same order twice. Approvals
+        # also expire so a forgotten approval cannot fire days later.
+        ttl = int(os.getenv("APPROVAL_TTL_SECONDS", "300"))
+        claim = db_utils.claim_for_execution(request_id, ttl)
+        if claim == "EXPIRED":
+            db_utils.log_audit_event("approval_expired", {"request_id": request_id, "operator": operator})
+            raise Exception(f"Approval expired (older than {ttl}s). Call request_trade_approval again.")
+        if claim != "OK":
+            raise Exception("Trade is not in an approved state (already executing or executed?)")
 
         db_utils.log_audit_event("approval_succeeded", {"request_id": request_id, "operator": operator})
 
@@ -717,6 +1004,8 @@ async def approve_trade(request_id: str, auth_pin: str, operator: str):
             if action in ("cancel_order", "cancelOrder"):
                 cancel_response = make_api_call(smart_api, "cancelOrder", params.get("order_id"), params.get("variety"))
                 cancel_response = redact_sensitive_keys(cancel_response)
+                if isinstance(cancel_response, dict):
+                    _raise_for_broker_error(cancel_response, "Order cancel failed")
                 db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": cancel_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "cancelOrder", "result": cancel_response, "operator": operator})
                 return {"success": True, "message": "Order cancelled successfully (see audit logs for details)"}
@@ -752,8 +1041,11 @@ async def approve_trade(request_id: str, auth_pin: str, operator: str):
                 order_id = None
                 if isinstance(order_response, str):
                     order_id = order_response
-                elif isinstance(order_response, dict) and order_response.get("status"):
-                    order_id = order_response.get("data", {}).get("orderid")
+                elif isinstance(order_response, dict):
+                    _raise_for_broker_error(order_response, "Order failed")
+                    order_id = (order_response.get("data") or {}).get("orderid")
+                if not order_id:
+                    raise Exception("Broker returned no order id")
                 db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": order_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "placeOrder", "result": order_response, "operator": operator})
                 return {"success": True, "order_id": order_id, "message": "Order executed successfully (see audit logs for details)"}

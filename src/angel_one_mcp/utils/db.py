@@ -4,7 +4,7 @@ import json
 import os
 import hmac
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
 _DB_PATH = None
@@ -57,6 +57,12 @@ def init_db(db_path: Optional[str] = None):
         )
         """
     )
+
+    # Migration: older DBs have no approved_at column.
+    try:
+        cur.execute("ALTER TABLE trade_intents ADD COLUMN approved_at TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     _CONN.commit()
 
@@ -115,6 +121,76 @@ def update_trade_intent_status(request_id: str, status: str, execution_result: O
         (status, exec_ts, exec_result_json, request_id),
     )
     conn.commit()
+
+
+def mark_human_approved(request_id: str) -> bool:
+    """Transition a PENDING intent to HUMAN_APPROVED. Returns True if the transition happened."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE trade_intents SET status = 'HUMAN_APPROVED', approved_at = ? WHERE request_id = ? AND status = 'PENDING'",
+        (_now_iso(), request_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def claim_for_execution(request_id: str, ttl_seconds: int = 300) -> str:
+    """Atomically move HUMAN_APPROVED -> EXECUTING so only one caller can run an
+    intent. Returns "OK", or "EXPIRED" if the approval is older than ttl_seconds
+    (the intent is then reset to PENDING and needs a fresh PIN), or "NOT_APPROVED"."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cutoff = (datetime.utcnow() - timedelta(seconds=ttl_seconds)).isoformat() + "Z"
+    cur.execute(
+        "UPDATE trade_intents SET status = 'EXECUTING' "
+        "WHERE request_id = ? AND status = 'HUMAN_APPROVED' AND approved_at >= ?",
+        (request_id, cutoff),
+    )
+    conn.commit()
+    if cur.rowcount > 0:
+        return "OK"
+    cur.execute(
+        "UPDATE trade_intents SET status = 'PENDING', approved_at = NULL "
+        "WHERE request_id = ? AND status = 'HUMAN_APPROVED'",
+        (request_id,),
+    )
+    conn.commit()
+    return "EXPIRED" if cur.rowcount > 0 else "NOT_APPROVED"
+
+
+def find_open_gtt_create_intents(symbol: str, exchange: str, transaction_type: str) -> List[Dict[str, Any]]:
+    """Find local GTT-create intents for a symbol/exchange/side that haven't been
+    executed yet (still PENDING or HUMAN_APPROVED) — used to catch accidental
+    duplicate GTT rule creation before it reaches the broker."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT request_id, created_at, order_params, meta, status FROM trade_intents "
+        "WHERE status IN ('PENDING', 'HUMAN_APPROVED', 'EXECUTING') ORDER BY created_at DESC"
+    )
+    matches = []
+    for row in cur.fetchall():
+        meta = json.loads(row["meta"]) if row["meta"] else {}
+        if meta.get("type") != "gttCreateRule":
+            continue
+        params = json.loads(row["order_params"])
+        if (
+            params.get("tradingsymbol") == symbol
+            and params.get("exchange") == exchange
+            and params.get("transactiontype") == transaction_type
+        ):
+            matches.append(
+                {
+                    "request_id": row["request_id"],
+                    "created_at": row["created_at"],
+                    "status": row["status"],
+                    "price": params.get("price"),
+                    "trigger_price": params.get("triggerprice"),
+                    "qty": params.get("qty"),
+                }
+            )
+    return matches
 
 
 def list_pending_intents() -> List[Dict[str, Any]]:

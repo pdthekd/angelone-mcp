@@ -1,6 +1,24 @@
 from datetime import datetime, timedelta
 from typing import Optional
-from SmartApi import SmartConnect
+import socket
+
+# SmartConnect's class body makes an unbounded (no-timeout) network call to
+# api.ipify.org at import time to detect the public IP -- and then always
+# discards the result anyway (overwritten with a hardcoded IP in a `finally`
+# block regardless of success or failure; see smartConnect.py lines ~71-81).
+# In a sandboxed environment with restricted/no network egress (e.g. Cowork/
+# Code isolated sessions, which spin up their own copy of this server), that
+# call can hang indefinitely and time out the whole MCP server startup before
+# it ever responds to `initialize`. Bound it to a few seconds so a blocked
+# network call fails fast instead of hanging -- functionally harmless since
+# the result is thrown away either way.
+_original_socket_timeout = socket.getdefaulttimeout()
+socket.setdefaulttimeout(5)
+try:
+    from SmartApi import SmartConnect
+finally:
+    socket.setdefaulttimeout(_original_socket_timeout)
+
 import pyotp
 from dotenv import load_dotenv
 import os
@@ -13,6 +31,18 @@ from .retry_helper_decorator import retry_with_backoff
 # parents up (utils -> angel_one_mcp -> src -> root), not 3.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 os.chdir(str(BASE_DIR))
+
+# Work around a bug in smartapi-python 1.5.5: the GTT create/modify/cancel
+# routes are hardcoded with a stale "/gtt-service" URL prefix that Angel
+# One's gateway no longer recognizes, so every call fails with "no Route
+# matched with those values" (a routing-layer error, not a broker/business
+# error). ruleDetails/ruleList have no such prefix and work correctly.
+# Confirmed against the live API: the "/gtt-service"-prefixed path 404s at
+# the gateway, while the corrected path returns a proper structured broker
+# response. _routes is a class attribute, so this patches every instance.
+SmartConnect._routes["api.gtt.create"] = "/rest/secure/angelbroking/gtt/v1/createRule"
+SmartConnect._routes["api.gtt.modify"] = "/rest/secure/angelbroking/gtt/v1/modifyRule"
+SmartConnect._routes["api.gtt.cancel"] = "/rest/secure/angelbroking/gtt/v1/cancelRule"
 
 class SessionManager:
     def __init__(self):

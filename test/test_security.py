@@ -44,35 +44,6 @@ async def test_direct_execution_disabled(monkeypatch):
     assert row is not None
     assert row["status"] == "PENDING"
 
-@pytest.mark.asyncio
-async def test_operator_auth(monkeypatch):
-    class DummyAPI:
-        def placeOrder(self, params):
-            return {"status": True, "data": {"orderid": "ORD-123"}}
-
-    monkeypatch.setattr(server_module.session_manager, "get_api", lambda: DummyAPI())
-
-    request_id = "req12345"
-    order_params = {"tradingsymbol": "SBIN-EQ", "quantity": 1}
-    db_utils.insert_trade_intent(request_id, order_params, {"type": "buy_stock_sll"})
-    db_utils.log_audit_event("test_setup", {"request_id": request_id})
-
-    # Wrong PIN should raise
-    with pytest.raises(Exception):
-        await server_module.approve_trade(request_id, "0000", "tester")
-
-    # Correct PIN and provide operator identity
-    result = await server_module.approve_trade(request_id, "9999", "tester")
-    assert isinstance(result, dict)
-    assert result.get("success", True) is True or "order_id" in result
-
-    row = db_utils.get_trade_intent(request_id)
-    assert row["status"] == "EXECUTED"
-    assert row["execution_result"] is not None
-    # execution_result should include approved_by (db.update_trade_intent_status writes it)
-    assert isinstance(row["execution_result"], dict)
-    assert row["execution_result"].get("approved_by") == "tester"
-
 def test_fuzzy_resolution_safety(monkeypatch):
     def fake_fuzzy_nse(normalized_name, original_name, limit=10):
         return [{"symbol": "FAKE", "name": "Fake Corp", "score": 91}]

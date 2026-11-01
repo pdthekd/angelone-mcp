@@ -95,6 +95,7 @@ class CreateGTTRule(BaseModel):
     trigger_price: float = Field(..., gt=0, description="Price at which the GTT rule triggers", json_schema_extra={"example": 196.0})
     disclosed_qty: int = Field(default=0, ge=0, description="Disclosed quantity", json_schema_extra={"example": 0})
     isSymbol: bool = Field(default=True, description="If True, 'entity' is treated as symbol; otherwise as name")
+    allow_duplicate: bool = Field(default=False, description="If False (default), block creation when a pending/approved/live GTT rule already exists for this symbol+exchange+side. Set True to bypass the duplicate check.")
 
 class ModifyGTTRule(BaseModel):
     rule_id: str = Field(..., description="GTT rule ID to modify", json_schema_extra={"example": "1"})
