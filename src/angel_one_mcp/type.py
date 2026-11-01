@@ -1,6 +1,7 @@
 # src/angel_one_mcp/type.py
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 from pydantic import BaseModel, Field
 
 class Exchange(str, Enum):
@@ -85,6 +86,24 @@ class GttProductType(str, Enum):
 class LTPRequest(BaseModel):
     entity: str = Field(..., description="Stock name or symbol to get last traded price for", json_schema_extra={"example": "SBIN-EQ"})
     isSymbol: bool = Field(default=True, description="If True, 'entity' is treated as symbol; otherwise as name")
+
+class MarketQuoteRequest(BaseModel):
+    entities: list[str] = Field(..., min_length=1, max_length=50, description="Trading symbols, e.g. SBIN-EQ", json_schema_extra={"example": ["SBIN-EQ", "TCS-EQ"]})
+    mode: Literal["LTP", "OHLC", "FULL"] = Field(default="LTP", description="LTP = price only, OHLC = plus open/high/low/close, FULL = plus depth, volume, circuit limits")
+
+class SearchScripRequest(BaseModel):
+    exchange: Exchange = Field(default=Exchange.NSE, description="NSE or BSE")
+    query: str = Field(..., min_length=1, description="Text to search for in trading symbols", json_schema_extra={"example": "SBIN"})
+
+class ChargeOrder(BaseModel):
+    entity: str = Field(..., description="Trading symbol", json_schema_extra={"example": "SBIN-EQ"})
+    transaction_type: GttTransactionType = Field(..., description="BUY or SELL")
+    product_type: ProductType = Field(default=ProductType.DELIVERY, description="DELIVERY or INTRADAY")
+    quantity: int = Field(..., gt=0, json_schema_extra={"example": 10})
+    price: float = Field(..., gt=0, json_schema_extra={"example": 800.0})
+
+class EstimateChargesRequest(BaseModel):
+    orders: list[ChargeOrder] = Field(..., min_length=1, max_length=50, description="Hypothetical orders to estimate brokerage and taxes for. Nothing is placed.")
 
 class CreateGTTRule(BaseModel):
     entity: str = Field(..., description="Stock name or symbol", json_schema_extra={"example": "SBIN-EQ"})

@@ -16,7 +16,10 @@ from .type import (
     CancelGTTRule,
     CancelOrder,
     CreateGTTRule,
+    EstimateChargesRequest,
     LTPRequest,
+    MarketQuoteRequest,
+    SearchScripRequest,
     ModifyGTTRule,
     SellStockSLL,
     SellStockSLM,
@@ -274,6 +277,99 @@ async def get_ltp(param: LTPRequest):
         res = redact_sensitive_keys(res)
         _raise_for_broker_error(res, "Failed to fetch LTP")
         return {"success": True, "quote": res.get("data") or {}}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_positions():
+    """Today's open positions (intraday and carried F&O). Read-only. Returns an empty list when there are none."""
+    try:
+        res = make_api_call(session_manager.get_api(), "position")
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch positions")
+        return {"success": True, "positions": res.get("data") or []}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_rms_limit():
+    """Funds and margin: available cash, net, collateral, utilised debits and M2M. Read-only."""
+    try:
+        res = make_api_call(session_manager.get_api(), "rmsLimit")
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch funds")
+        return {"success": True, "funds": res.get("data") or {}}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def get_market_quote(param: MarketQuoteRequest):
+    """Quotes for up to 50 symbols in one call (mode LTP, OHLC or FULL). Read-only.
+    Symbols the broker could not find are listed under `unfetched`."""
+    try:
+        tokens: dict = {}
+        unresolved = []
+        for entity in param.entities:
+            token, symbol, exch = getTokenFromAngelMaster(entity)
+            if not token or not exch:
+                unresolved.append(entity)
+                continue
+            tokens.setdefault(exch, []).append(token)
+        if not tokens:
+            raise Exception(f"None of the symbols could be resolved: {unresolved}")
+        res = make_api_call(session_manager.get_api(), "getMarketData", param.mode, tokens)
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch quotes")
+        data = res.get("data") or {}
+        return {
+            "success": True,
+            "mode": param.mode,
+            "quotes": data.get("fetched") or [],
+            "unfetched": (data.get("unfetched") or []) + [{"symbol": s, "reason": "not found in scrip master"} for s in unresolved],
+        }
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def search_scrip(param: SearchScripRequest):
+    """Find trading symbols and tokens matching a text query on NSE or BSE. Read-only."""
+    try:
+        res = make_api_call(session_manager.get_api(), "_postRequest", "api.search.scrip",
+                            {"exchange": param.exchange.value, "searchscrip": param.query})
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Scrip search failed")
+        return {"success": True, "matches": res.get("data") or []}
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
+async def estimate_charges(param: EstimateChargesRequest):
+    """Estimate brokerage, exchange fees, STT and other taxes for hypothetical orders.
+    Read-only: nothing is placed and no intent is created."""
+    try:
+        orders = []
+        for o in param.orders:
+            token, symbol, exch = getTokenFromAngelMaster(o.entity)
+            if not token or not exch:
+                raise Exception(f"Unknown symbol: {o.entity}")
+            orders.append({
+                "product_type": o.product_type.value,
+                "transaction_type": o.transaction_type.value,
+                "quantity": str(o.quantity),
+                "price": str(o.price),
+                "exchange": exch,
+                "symbol_name": symbol,
+                "token": token,
+            })
+        res = make_api_call(session_manager.get_api(), "_postRequest", "api.estimateCharges", {"orders": orders})
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Charge estimate failed")
+        return {"success": True, "charges": res.get("data") or {}}
     except Exception as e:
         raise RuntimeError(f"Error: {safe_error_message(e)}")
 

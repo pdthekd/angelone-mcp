@@ -236,6 +236,11 @@ The MCP server provides the following tools to Claude. IMPORTANT: buy/sell/targe
 | `get_exchanges` | Get list of available exchanges (NSE, BSE) |
 
 | `current_holdings` | View your current stock holdings and portfolio summary |
+| `get_positions` | Open intraday/F&O positions (read-only) |
+| `get_rms_limit` | Funds and margin: cash, collateral, utilised (read-only) |
+| `get_market_quote` | Quotes for up to 50 symbols, mode LTP/OHLC/FULL (read-only) |
+| `search_scrip` | Find symbols and tokens by text (read-only) |
+| `estimate_charges` | Brokerage and tax estimate for hypothetical orders; places nothing |
 
 | `get_pending_orders` | View all pending orders (orders already acknowledged by broker) |
 
