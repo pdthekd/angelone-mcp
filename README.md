@@ -281,7 +281,7 @@ Approval flow:
 2. `request_trade_approval` / `request_batch_trade_approval` open a PIN dialog on your own desktop. The PIN is checked inside the server and never passes through the chat.
 3. `approve_trade(request_id, operator)` runs the intent. Each intent runs at most once, and only within `APPROVAL_TTL_SECONDS` of the PIN approval.
 
-Env vars: `HUMAN_APPROVAL_PIN` (required), `ALLOWED_OPERATORS` (optional, comma-separated), `APPROVAL_TTL_SECONDS` (optional, default 300).
+Env vars: `HUMAN_APPROVAL_PIN` (required), `ALLOWED_OPERATORS` (optional, comma-separated), `APPROVAL_TTL_SECONDS` (optional, default 900).
 
 ## Security Notes
 

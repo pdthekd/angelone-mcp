@@ -135,7 +135,7 @@ def mark_human_approved(request_id: str) -> bool:
     return cur.rowcount > 0
 
 
-def claim_for_execution(request_id: str, ttl_seconds: int = 300) -> str:
+def claim_for_execution(request_id: str, ttl_seconds: int = 900) -> str:
     """Atomically move HUMAN_APPROVED -> EXECUTING so only one caller can run an
     intent. Returns "OK", or "EXPIRED" if the approval is older than ttl_seconds
     (the intent is then reset to PENDING and needs a fresh PIN), or "NOT_APPROVED"."""

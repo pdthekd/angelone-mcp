@@ -986,7 +986,7 @@ async def approve_trade(request_id: str, operator: str):
         # Atomic claim: only one caller can move HUMAN_APPROVED -> EXECUTING, so a
         # retry or concurrent call can never send the same order twice. Approvals
         # also expire so a forgotten approval cannot fire days later.
-        ttl = int(os.getenv("APPROVAL_TTL_SECONDS", "300"))
+        ttl = int(os.getenv("APPROVAL_TTL_SECONDS", "900"))
         claim = db_utils.claim_for_execution(request_id, ttl)
         if claim == "EXPIRED":
             db_utils.log_audit_event("approval_expired", {"request_id": request_id, "operator": operator})
