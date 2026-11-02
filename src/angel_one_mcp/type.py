@@ -93,6 +93,14 @@ class ModifyOrder(BaseModel):
     price: Optional[float] = Field(default=None, gt=0, description="New limit price. Omit to keep the current one.")
     trigger_price: Optional[float] = Field(default=None, gt=0, description="New trigger price (stop-loss orders). Omit to keep the current one.")
 
+class TrailGTTRules(BaseModel):
+    symbols: Optional[list[str]] = Field(default=None, description="Only these symbols (e.g. ['QPOWER-EQ']). Omit for all active SELL rules.")
+    sl_trail_pct: float = Field(default=8.0, gt=0, lt=50, description="Stop-loss rules (trigger below price): new trigger = LTP minus this %. Only ever moves up.")
+    target_proximity_pct: float = Field(default=2.0, ge=0, lt=50, description="Target rules (trigger above price): only trail when LTP is within this % of the trigger.")
+    target_gap_pct: float = Field(default=5.0, gt=0, lt=100, description="Trailed target = LTP plus this %.")
+    min_step_pct: float = Field(default=1.0, ge=0, description="Ignore moves smaller than this % of the current trigger.")
+    create_intents: bool = Field(default=False, description="False = only show the plan. True = also create modify intents (nothing executes; approve them afterwards).")
+
 class MarketQuoteRequest(BaseModel):
     entities: list[str] = Field(..., min_length=1, max_length=50, description="Trading symbols, e.g. SBIN-EQ", json_schema_extra={"example": ["SBIN-EQ", "TCS-EQ"]})
     mode: Literal["LTP", "OHLC", "FULL"] = Field(default="LTP", description="LTP = price only, OHLC = plus open/high/low/close, FULL = plus depth, volume, circuit limits")

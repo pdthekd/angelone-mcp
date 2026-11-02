@@ -24,6 +24,7 @@ from .type import (
     ModifyGTTRule,
     SellStockSLL,
     SellStockSLM,
+    TrailGTTRules,
     StockInput,
     TargetSell,
 )
@@ -812,6 +813,85 @@ async def modify_gtt_rule(param: ModifyGTTRule):
         meta = {"type": "gttModifyRule", "rule_id": param.rule_id, "symbol": rule.get("tradingsymbol"), "exchange": rule.get("exchange")}
         request_id = _create_intent_and_audit("gttModifyRule", gttparams, meta)
         return f"⚠️ GTT MODIFY INTENT CREATED. ID: {request_id}. To execute, you MUST call the `approve_trade` tool."
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+def _tick(x: float) -> float:
+    return round(round(x / 0.05) * 0.05, 2)
+
+
+def _plan_trail(rule: dict, ltp: float, p) -> dict:
+    """Pure planning for one active SELL GTT rule. Triggers only ever move UP.
+    trigger below LTP = stop-loss -> trail to LTP - sl_trail_pct.
+    trigger at/above LTP = target -> once LTP is within target_proximity_pct of it, raise to LTP + target_gap_pct.
+    The existing price-minus-trigger offset is preserved."""
+    trigger = float(rule.get("triggerprice") or 0)
+    price = float(rule.get("price") or 0)
+    if trigger <= 0 or ltp <= 0:
+        return {"skip": "missing trigger or LTP"}
+    if trigger < ltp:
+        kind, new_trigger = "stop_loss", _tick(ltp * (1 - p.sl_trail_pct / 100))
+    elif ltp >= trigger * (1 - p.target_proximity_pct / 100):
+        kind, new_trigger = "target", _tick(ltp * (1 + p.target_gap_pct / 100))
+    else:
+        return {"skip": f"target {trigger} is more than {p.target_proximity_pct}% above LTP {ltp}"}
+    if new_trigger < trigger * (1 + p.min_step_pct / 100):
+        return {"skip": f"{kind}: move to {new_trigger} is below the {p.min_step_pct}% minimum step"}
+    return {"kind": kind, "new_trigger": new_trigger, "new_price": _tick(new_trigger + (price - trigger))}
+
+
+@mcp.tool()
+async def trail_gtt_rules(param: TrailGTTRules):
+    """Plan (and optionally create intents for) trailing your active SELL GTT stop-loss and target
+    rules to the current market. Triggers only move UP, never down. By default it only SHOWS the
+    plan. With create_intents=true it creates modify intents (one per rule) that do NOT execute:
+    approve them with request_batch_trade_approval, then approve_trade for each."""
+    try:
+        smart_api = session_manager.get_api()
+        res = make_api_call(smart_api, "gttLists", ["NEW", "ACTIVE"], 1, 100)
+        if isinstance(res, str):
+            res = json.loads(res)
+        res = redact_sensitive_keys(res)
+        _raise_for_broker_error(res, "Failed to fetch GTT rules")
+        wanted = {s.upper() for s in param.symbols} if param.symbols else None
+        rules = [r for r in (res.get("data") or [])
+                 if r.get("transactiontype") == "SELL" and (not wanted or (r.get("tradingsymbol") or "").upper() in wanted)]
+        if not rules:
+            return {"success": True, "proposals": [], "skipped": [], "note": "No matching active SELL rules"}
+
+        tokens: dict = {}
+        for r in rules:
+            tokens.setdefault(r["exchange"], set()).add(str(r["symboltoken"]))
+        q = make_api_call(smart_api, "getMarketData", "LTP", {e: sorted(t) for e, t in tokens.items()})
+        q = redact_sensitive_keys(q)
+        _raise_for_broker_error(q, "Failed to fetch LTPs")
+        ltps = {(x.get("exchange"), str(x.get("symbolToken"))): x.get("ltp") for x in (q.get("data") or {}).get("fetched", [])}
+
+        open_modify = {str((i.get("meta") or {}).get("rule_id")) for i in db_utils.list_pending_intents()
+                       if (i.get("meta") or {}).get("type") == "gttModifyRule"}
+        proposals, skipped = [], []
+        for r in rules:
+            sym, rid = r.get("tradingsymbol"), str(r.get("id"))
+            ltp = ltps.get((r["exchange"], str(r["symboltoken"])))
+            plan = _plan_trail(r, float(ltp or 0), param)
+            if "skip" in plan:
+                skipped.append({"rule_id": rid, "symbol": sym, "reason": plan["skip"]})
+                continue
+            if rid in open_modify:
+                skipped.append({"rule_id": rid, "symbol": sym, "reason": "a modify intent for this rule is already pending"})
+                continue
+            item = {"rule_id": rid, "symbol": sym, "kind": plan["kind"], "ltp": ltp, "qty": r.get("qty"),
+                    "old_trigger": r.get("triggerprice"), "old_price": r.get("price"),
+                    "new_trigger": plan["new_trigger"], "new_price": plan["new_price"]}
+            if param.create_intents:
+                gttparams = {"id": rid, "symboltoken": r["symboltoken"], "exchange": r["exchange"],
+                             "price": plan["new_price"], "qty": r.get("qty"), "triggerprice": plan["new_trigger"],
+                             "disclosedqty": r.get("disclosedqty") or 0}
+                meta = {"type": "gttModifyRule", "rule_id": rid, "symbol": sym, "exchange": r["exchange"], "trail": plan["kind"]}
+                item["request_id"] = _create_intent_and_audit("gttModifyRule", gttparams, meta)
+            proposals.append(item)
+        return {"success": True, "intents_created": param.create_intents, "proposals": proposals, "skipped": skipped}
     except Exception as e:
         raise RuntimeError(f"Error: {safe_error_message(e)}")
 
