@@ -719,6 +719,34 @@ async def cancel_order(param: CancelOrder):
         raise RuntimeError(f"Error: {safe_error_message(e)}")
 
 
+def _check_sell_coverage(smart_api, symbol: str, exch: str, qty: int, allow_overlap: bool) -> None:
+    """Refuse a SELL GTT for more shares than are held, or (unless allow_overlap)
+    more than the holdings not already covered by live/pending SELL rules."""
+    holdings = redact_sensitive_keys(make_api_call(smart_api, "allholding"))
+    held = 0
+    for h in ((holdings or {}).get("data") or {}).get("holdings") or []:
+        if h.get("tradingsymbol") == symbol and h.get("exchange") == exch:
+            held += int(h.get("quantity") or 0)
+    if qty > held:
+        raise Exception(f"Cannot SELL {qty} {symbol}: only {held} held on {exch}.")
+    if allow_overlap:
+        return
+
+    covered = 0
+    live = redact_sensitive_keys(make_api_call(smart_api, "gttLists", ["NEW", "ACTIVE", "SENTTOEXCHANGE"], 1, 100))
+    if isinstance(live, dict) and live.get("status"):
+        for r in live.get("data") or []:
+            if r.get("tradingsymbol") == symbol and r.get("exchange") == exch and r.get("transactiontype") == "SELL":
+                covered += int(r.get("qty") or 0)
+    for m in db_utils.find_open_gtt_create_intents(symbol, exch, "SELL"):
+        covered += int(m.get("qty") or 0)
+    if qty > held - covered:
+        raise Exception(
+            f"Cannot SELL {qty} {symbol}: {held} held, {covered} already covered by live/pending SELL rules "
+            f"({max(held - covered, 0)} free). Modify the existing rule, or pass allow_duplicate=true to overlap on purpose."
+        )
+
+
 @mcp.tool()
 async def create_gtt_rule(param: CreateGTTRule):
     """Create a GTT (Good Till Trigger) rule — a standing conditional order that persists for up to a year,
@@ -735,6 +763,9 @@ async def create_gtt_rule(param: CreateGTTRule):
             raise Exception("No such company registered in NSE or BSE")
         if exch not in ("NSE", "BSE"):
             raise Exception("GTT currently only supports NSE and BSE")
+
+        if param.transaction_type.value == "SELL":
+            _check_sell_coverage(session_manager.get_api(), symbol, exch, param.quantity, param.allow_duplicate)
 
         if not param.allow_duplicate:
             duplicates = []
