@@ -3,7 +3,7 @@ import pytest
 from angel_one_mcp import server as s
 from angel_one_mcp import type as t
 
-NEW_TOOLS = {"get_positions", "get_rms_limit", "get_market_quote", "search_scrip", "estimate_charges"}
+NEW_TOOLS = {"modify_order", "get_positions", "get_rms_limit", "get_market_quote", "search_scrip", "estimate_charges"}
 
 
 class FakeAPI:

@@ -19,6 +19,7 @@ from .type import (
     EstimateChargesRequest,
     LTPRequest,
     MarketQuoteRequest,
+    ModifyOrder,
     SearchScripRequest,
     ModifyGTTRule,
     SellStockSLL,
@@ -110,6 +111,13 @@ def _raise_for_broker_error(response, context: str = ""):
     detail = f"{message} (errorcode={errorcode}" + (f": {description}" if description else "") + ")"
     prefix = f"{context}: " if context else ""
     raise Exception(f"{prefix}{detail}")
+
+
+# Intent types that mean "place a new order". Anything else unrecognised is refused
+# by approve_trade rather than silently treated as a new order.
+PLACE_ORDER_INTENT_TYPES = {
+    "placeOrder", "buy_stock_sll", "buy_stock_slm", "sell_stock_sll", "sell_stock_slm", "target_sell",
+}
 
 
 def _create_intent_and_audit(action: str, orderparams: dict, meta: Optional[dict] = None) -> str:
@@ -655,6 +663,49 @@ async def target_sell(param: TargetSell):
 
 
 @mcp.tool()
+async def modify_order(param: ModifyOrder):
+    """Create an intent to change quantity, price and/or trigger price of an open order.
+    Unchanged fields are filled from the live order. Does NOT execute: a human must
+    approve it with request_trade_approval, then approve_trade."""
+    try:
+        if param.quantity is None and param.price is None and param.trigger_price is None:
+            raise Exception("Nothing to change: pass quantity, price and/or trigger_price")
+        book = make_api_call(session_manager.get_api(), "orderBook")
+        book = redact_sensitive_keys(book)
+        _raise_for_broker_error(book, "Failed to fetch order book")
+        current = next((o for o in (book.get("data") or []) if o.get("orderid") == param.order_id), None)
+        if not current:
+            raise Exception(f"Order {param.order_id} not found in today's order book")
+        if (current.get("status") or "").lower() not in ("open", "trigger pending", "pending"):
+            raise Exception(f"Order {param.order_id} is '{current.get('status')}', only open orders can be modified")
+
+        orderparams = {
+            "variety": current.get("variety") or "NORMAL",
+            "orderid": param.order_id,
+            "ordertype": current.get("ordertype"),
+            "producttype": current.get("producttype"),
+            "duration": current.get("duration") or "DAY",
+            "price": param.price if param.price is not None else current.get("price"),
+            "quantity": param.quantity if param.quantity is not None else current.get("quantity"),
+            "tradingsymbol": current.get("tradingsymbol"),
+            "symboltoken": current.get("symboltoken"),
+            "exchange": current.get("exchange"),
+        }
+        trigger = param.trigger_price if param.trigger_price is not None else current.get("triggerprice")
+        if trigger not in (None, "", 0, 0.0, "0", "0.0", "0.00"):
+            orderparams["triggerprice"] = trigger
+        meta = {
+            "type": "modifyOrder", "symbol": current.get("tradingsymbol"), "order_id": param.order_id,
+            "quantity": orderparams["quantity"],
+            "before": {"quantity": current.get("quantity"), "price": current.get("price"), "triggerprice": current.get("triggerprice")},
+        }
+        request_id = _create_intent_and_audit("modifyOrder", orderparams, meta)
+        return f"⚠️ MODIFY INTENT CREATED. ID: {request_id}. To execute, call `request_trade_approval` then `approve_trade`."
+    except Exception as e:
+        raise RuntimeError(f"Error: {safe_error_message(e)}")
+
+
+@mcp.tool()
 async def cancel_order(param: CancelOrder):
     try:
         order_id = param.order_id
@@ -1105,6 +1156,15 @@ async def approve_trade(request_id: str, operator: str):
                 db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": cancel_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "cancelOrder", "result": cancel_response, "operator": operator})
                 return {"success": True, "message": "Order cancelled successfully (see audit logs for details)"}
+            elif action == "modifyOrder":
+                modify_response = make_api_call(smart_api, "modifyOrder", dict(params))
+                modify_response = redact_sensitive_keys(modify_response)
+                if not isinstance(modify_response, dict):
+                    raise Exception("Unexpected response from broker on modify")
+                _raise_for_broker_error(modify_response, "Order modify failed")
+                db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": modify_response})
+                db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "modifyOrder", "result": modify_response, "operator": operator})
+                return {"success": True, "order_id": (modify_response.get("data") or {}).get("orderid"), "message": "Order modified successfully (see audit logs for details)"}
             elif action == "gttCreateRule":
                 # NOTE: SmartApi's gttCreateRule() wrapper returns response['data']['id'] directly
                 # and throws an unhandled TypeError on failure (data is null). Call _postRequest
@@ -1131,7 +1191,7 @@ async def approve_trade(request_id: str, operator: str):
                 db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": gtt_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "gttCancelRule", "result": gtt_response, "operator": operator})
                 return {"success": True, "message": "GTT rule cancelled successfully (see audit logs for details)"}
-            else:
+            elif action in PLACE_ORDER_INTENT_TYPES:
                 order_response = make_api_call(smart_api, "placeOrder", params)
                 order_response = redact_sensitive_keys(order_response)
                 order_id = None
@@ -1145,6 +1205,8 @@ async def approve_trade(request_id: str, operator: str):
                 db_utils.update_trade_intent_status(request_id, "EXECUTED", {"result": order_response})
                 db_utils.log_audit_event("intent_executed", {"request_id": request_id, "action": "placeOrder", "result": order_response, "operator": operator})
                 return {"success": True, "order_id": order_id, "message": "Order executed successfully (see audit logs for details)"}
+            else:
+                raise Exception(f"Unknown intent type '{action}'; refusing to execute")
         except Exception as ex:
             err_msg = safe_error_message(ex)
             db_utils.update_trade_intent_status(request_id, "FAILED", {"error": err_msg})

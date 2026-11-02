@@ -256,6 +256,8 @@ The MCP server provides the following tools to Claude. IMPORTANT: buy/sell/targe
 
 | `target_sell` | Create a Target Sell order intent (returns request_id). Does NOT execute. |
 
+| `modify_order` | Create a Modify order intent (qty/price/trigger of an open order). Does NOT execute. |
+
 | `cancel_order` | Create a Cancel order intent (returns request_id). Does NOT execute. |
 
 | `approve_trade` | Execute an intent a human already approved via the PIN dialog (`request_id`, `operator`). |

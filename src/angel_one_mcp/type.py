@@ -1,7 +1,7 @@
 # src/angel_one_mcp/type.py
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 class Exchange(str, Enum):
@@ -86,6 +86,12 @@ class GttProductType(str, Enum):
 class LTPRequest(BaseModel):
     entity: str = Field(..., description="Stock name or symbol to get last traded price for", json_schema_extra={"example": "SBIN-EQ"})
     isSymbol: bool = Field(default=True, description="If True, 'entity' is treated as symbol; otherwise as name")
+
+class ModifyOrder(BaseModel):
+    order_id: str = Field(..., description="Order ID of an open or trigger-pending order", json_schema_extra={"example": "241008000012345"})
+    quantity: Optional[int] = Field(default=None, gt=0, description="New quantity. Omit to keep the current one.")
+    price: Optional[float] = Field(default=None, gt=0, description="New limit price. Omit to keep the current one.")
+    trigger_price: Optional[float] = Field(default=None, gt=0, description="New trigger price (stop-loss orders). Omit to keep the current one.")
 
 class MarketQuoteRequest(BaseModel):
     entities: list[str] = Field(..., min_length=1, max_length=50, description="Trading symbols, e.g. SBIN-EQ", json_schema_extra={"example": ["SBIN-EQ", "TCS-EQ"]})
